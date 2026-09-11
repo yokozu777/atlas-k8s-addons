@@ -1,0 +1,20 @@
+{{- $nginxConf := .Files.Get "files/login/default.conf" -}}
+{{- if not $nginxConf -}}
+{{- fail "missing files/login/default.conf" -}}
+{{- end -}}
+{{- $indexHtml := .Files.Get "files/login/index.html" -}}
+{{- if not $indexHtml -}}
+{{- fail "missing files/login/index.html" -}}
+{{- end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.loginUi.serviceName }}
+  namespace: {{ .Values.pinnipedNamespace }}
+  labels:
+    app: {{ .Values.loginUi.serviceName }}
+data:
+  default.conf: |
+{{ tpl $nginxConf . | nindent 4 }}
+  index.html: |
+{{ tpl $indexHtml . | nindent 4 }}

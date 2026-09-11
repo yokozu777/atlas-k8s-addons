@@ -1,0 +1,6 @@
+---
+- name: Install helm binary on debug tooling host
+  ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/install_helm_binary.yaml"
+  vars:
+    install_helm_dest: "{{ debug_tooling_install_dir }}/helm"
+    install_helm_staging_dir: "{{ debug_tooling_staging_dir }}"

@@ -1,0 +1,41 @@
+---
+- name: Assert grafana_dashboard_source is a mapping with known keys
+  ansible.builtin.assert:
+    that:
+      - grafana_dashboard_source is mapping
+      - (grafana_dashboard_source | list | sort) == ((grafana_dashboard_github_native_keys + grafana_dashboard_grafana_native_keys) | sort)
+    fail_msg: >-
+      grafana_dashboard_source keys must be exactly github-native
+      ({{ grafana_dashboard_github_native_keys | join(', ') }}) plus grafana-native
+      ({{ grafana_dashboard_grafana_native_keys | join(', ') }});
+      got {{ grafana_dashboard_source | list | sort | join(', ') }}
+
+- name: Assert grafana_dashboard_source values for github-native keys
+  ansible.builtin.assert:
+    that:
+      - grafana_dashboard_source[item] | default('') in grafana_dashboard_source_github_native_values
+    fail_msg: >-
+      grafana_dashboard_source.{{ item }} must be github or infra
+      (got {{ grafana_dashboard_source[item] | default('') }})
+  loop: "{{ grafana_dashboard_github_native_keys }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Assert grafana_dashboard_source values for grafana-native keys
+  ansible.builtin.assert:
+    that:
+      - grafana_dashboard_source[item] | default('') in grafana_dashboard_source_grafana_native_values
+    fail_msg: >-
+      grafana_dashboard_source.{{ item }} must be grafana or infra
+      (got {{ grafana_dashboard_source[item] | default('') }})
+  loop: "{{ grafana_dashboard_grafana_native_keys }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Assert grafana_dashboard_infra_base when any dashboard source is infra
+  when: "'infra' in (grafana_dashboard_source | dict2items | map(attribute='value') | list)"
+  ansible.builtin.assert:
+    that:
+      - grafana_dashboard_infra_base | default('') | trim | length > 0
+    fail_msg: >-
+      grafana_dashboard_infra_base is required when grafana_dashboard_source has infra

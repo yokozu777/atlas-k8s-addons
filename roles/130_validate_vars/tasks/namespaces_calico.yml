@@ -1,0 +1,7 @@
+---
+- name: Assert Calico namespace variables are set
+  ansible.builtin.assert:
+    that:
+      - calico_operator_namespace | default('') | length > 0
+      - calico_system_namespace | default('') | length > 0
+    fail_msg: calico_operator_namespace and calico_system_namespace must be set in group_vars/all/atlas-k8s-addons.yml

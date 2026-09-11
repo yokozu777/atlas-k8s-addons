@@ -1,0 +1,6 @@
+---
+- name: Install helm binary on Ansible controller
+  ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/install_helm_binary.yaml"
+  vars:
+    install_helm_dest: "{{ controller_bin_dir }}/helm"
+    install_helm_staging_dir: "{{ controller_staging_dir }}"

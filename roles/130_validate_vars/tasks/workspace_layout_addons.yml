@@ -1,0 +1,15 @@
+---
+- name: Assert cluster workspace layout is consistent (addons)
+  ansible.builtin.assert:
+    that:
+      - cluster_workspace_id | default('') | length > 0
+      - cluster_workspace_parent | default('') | length > 0
+      - cluster_workspace_root | default('') | length > 0
+      - cluster_workspace_id is match('^[a-zA-Z0-9.-]+$')
+      - cluster_workspace_id == k8s_cluster_domain
+      - cluster_workspace_root is match('^' ~ cluster_workspace_parent ~ '/')
+      - controller_workspace is match('^' ~ cluster_workspace_root)
+      - keycloak_tf_workspace is match('^' ~ cluster_workspace_root)
+    fail_msg: >-
+      Cluster workspace paths must live under cluster_workspace_root
+      (workspace/{{ k8s_cluster_domain }}/) — check group_vars/all/atlas-k8s-addons.yml

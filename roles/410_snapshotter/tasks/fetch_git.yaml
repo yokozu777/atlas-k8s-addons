@@ -1,0 +1,7 @@
+---
+- name: Get external-snapshotter from git
+  ansible.builtin.git:
+    repo: "{{ snapshotter_effective_repo }}"
+    dest: "{{ external_snapshotter_dir }}"
+    version: "v{{ snapshotter_version }}"
+    depth: 1

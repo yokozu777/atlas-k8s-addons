@@ -1,0 +1,42 @@
+    - name: Remove {{ opencost_namespace }} Helm chart (absent)
+      when: opencost_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: opencost
+            namespace: "{{ opencost_namespace }}"
+        helm_chart_absent_delete_namespace: true
+        helm_chart_absent_namespaces:
+          - "{{ opencost_namespace }}"
+        helm_chart_absent_ingress_app_names:
+          - opencost
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/opencost_values.yaml"
+
+    - name: Install/configure opencost chart
+      when: opencost_chart_state | default('present') == 'present'
+      block:
+        - name: Render opencost helm values
+          ansible.builtin.template:
+            src: opencost_values.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/opencost_values.yaml"
+            mode: '0644'
+
+        - name: Helming {{ opencost_namespace }}
+          ansible.builtin.command: >-
+            helm upgrade --install opencost opencost/opencost
+            --namespace {{ opencost_namespace }} --create-namespace
+            -f {{ k8s_manifests_dir }}/opencost_values.yaml
+            {{ opencost_chart_version | helm_chart_version_args }}
+
+        - name: Wait for OpenCost Available
+          ansible.builtin.command: >-
+            kubectl wait --timeout=5m
+            -n {{ opencost_namespace }}
+            --for=condition=Available
+            deploy/opencost
+          register: wait_opencost
+          until: wait_opencost.rc == 0
+          retries: 20
+          delay: 6
+          changed_when: false

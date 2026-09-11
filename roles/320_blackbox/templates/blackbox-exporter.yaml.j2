@@ -1,0 +1,44 @@
+extraSecretMounts:
+  - name: ca
+    mountPath: /etc/ssl/certs/{{ k8s_ca_cert_filename }}
+    subPath: {{ k8s_ca_cert_filename }}
+    secretName: ca-k8s-external
+    readOnly: true
+    defaultMode: 420
+
+config:
+  modules:
+    http_2xx:
+      prober: http
+      timeout: 10s
+      http:
+        valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+        valid_status_codes: [200, 204]
+        follow_redirects: true
+        preferred_ip_protocol: "ip4"
+        tls_config:
+          ca_file: /etc/ssl/certs/{{ k8s_ca_cert_filename }}
+
+    # OAuth2-proxy / Keycloak / Grafana: 302 redirect to login and 401 are healthy.
+    http_oauth_ok:
+      prober: http
+      timeout: 10s
+      http:
+        valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+        valid_status_codes: [200, 204, 301, 302, 401, 403, 405]
+        follow_redirects: true
+        preferred_ip_protocol: "ip4"
+        tls_config:
+          ca_file: /etc/ssl/certs/{{ k8s_ca_cert_filename }}
+
+    # ssl-passthrough / HTTPS backends (Elasticsearch, Kibana): backend presents its own cert.
+    http_ssl_passthrough:
+      prober: http
+      timeout: 10s
+      http:
+        valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+        valid_status_codes: [200, 204, 301, 302, 401, 403, 405]
+        follow_redirects: false
+        preferred_ip_protocol: "ip4"
+        tls_config:
+          insecure_skip_verify: true

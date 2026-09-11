@@ -1,0 +1,12 @@
+apiVersion: authentication.concierge.pinniped.dev/v1alpha1
+kind: JWTAuthenticator
+metadata:
+  name: {{ .Values.jwtAuthenticatorName }}
+spec:
+  issuer: {{ .Values.federationIssuer | quote }}
+  audience: {{ .Values.federationIssuer | quote }}
+  claims:
+    username: username
+    groups: groups
+  tls:
+    certificateAuthorityData: {{ .Values.caBundleB64 | quote }}

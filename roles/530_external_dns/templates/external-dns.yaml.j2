@@ -1,0 +1,22 @@
+provider:
+  name: rfc2136
+txtPrefix: {{ external_dns_namespace }}-
+txtOwnerId: {{ external_dns_txt_owner_id }}
+domainFilters:
+  - {{ k8s_cluster_domain }}
+sources:
+  - service
+  - gateway-httproute
+  - gateway-tlsroute
+  # - istio-gateway
+  # - istio-virtualservice
+extraArgs:
+  - --rfc2136-host={{ dns_server_ip }}
+  - --rfc2136-port=53
+  - --rfc2136-zone={{ k8s_cluster_domain }}
+  - --rfc2136-tsig-secret={{ k8s_secrets.external_dns_tsig_secret }}
+  - --rfc2136-tsig-secret-alg=hmac-sha256
+  - --rfc2136-tsig-keyname={{ k8s_cluster_domain }}-key
+  - --rfc2136-tsig-axfr
+# serviceAccount:
+#   name: {{ external_dns_namespace }}-k8s

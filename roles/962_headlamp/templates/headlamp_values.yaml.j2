@@ -1,0 +1,21 @@
+fullnameOverride: headlamp
+
+config:
+  inCluster: true
+  # Only safe behind Envoy Gateway SecurityPolicy OIDC (961).
+  unsafeUseServiceAccountToken: true
+  enableHelm: false
+  oidc:
+    secret:
+      create: false
+
+env:
+  - name: HEADLAMP_CONFIG_METRICS_ENABLED
+    value: "true"
+
+clusterRoleBinding:
+  create: true
+  clusterRoleName: cluster-admin
+
+ingress:
+  enabled: false

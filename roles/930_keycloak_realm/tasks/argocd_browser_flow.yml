@@ -1,0 +1,58 @@
+---
+# Vanilla Keycloak has no "member of group" authenticator. Gate login to client
+# argocd by requiring realm role argocd-access, which Terraform assigns only to
+# group /argocd-admins. Users outside that group get access_denied before the
+# authorization code is issued. Argo CD RBAC still uses the groups claim.
+#
+# Wrapper flow argocd-browser (REQUIRED + CONDITIONAL only; no ALTERNATIVE mix):
+#   argocd-identify REQUIRED (clone of built-in browser Cookie/Forms)
+#   argocd-admins-gate CONDITIONAL (deny unless realm role argocd-access)
+- name: Refresh Keycloak admin token for argocd-browser flow
+  ansible.builtin.uri:
+    url: "{{ keycloak_url }}/auth/realms/master/protocol/openid-connect/token"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      grant_type: password
+      client_id: admin-cli
+      username: admin
+      password: "{{ k8s_secrets.keycloak_admin_password }}"
+    validate_certs: false
+    status_code: 200
+  register: kc_token
+  no_log: true
+
+- name: Ensure argocd-browser identify wrapper and /argocd-admins group gate
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_python_interpreter | default('python3') }}"
+      - "{{ role_path }}/files/ensure_argocd_browser_flow.py"
+  environment:
+    KEYCLOAK_URL: "{{ keycloak_url }}"
+    KEYCLOAK_REALM: "{{ keycloak_realm }}"
+    KEYCLOAK_TOKEN: "{{ kc_token.json.access_token }}"
+    KEYCLOAK_FLOW_STATUS_FILE: "{{ keycloak_tf_workspace }}/argocd-browser-ensure.status"
+  no_log: true
+  failed_when: false
+  changed_when: false
+
+- name: Read argocd-browser flow ensure status
+  ansible.builtin.slurp:
+    src: "{{ keycloak_tf_workspace }}/argocd-browser-ensure.status"
+  register: kc_argocd_browser_status
+  failed_when: false
+  changed_when: >-
+    kc_argocd_browser_status.content is defined
+    and ((kc_argocd_browser_status.content | b64decode | trim) | split('\n') | last) == 'CHANGED'
+
+- name: Fail if argocd-browser flow ensure failed
+  ansible.builtin.fail:
+    msg: >-
+      {{
+        (kc_argocd_browser_status.content | b64decode)
+        if (kc_argocd_browser_status.content is defined)
+        else 'status file missing (ensure did not write KEYCLOAK_FLOW_STATUS_FILE: crash before write or OSError; command stderr is hidden by no_log)'
+      }}
+  when: >-
+    kc_argocd_browser_status.content is not defined
+    or ((kc_argocd_browser_status.content | b64decode) | split('\n') | first) == 'ERROR'

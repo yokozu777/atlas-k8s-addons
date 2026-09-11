@@ -1,0 +1,7 @@
+---
+# Operator catalog: group_vars/all/atlas-k8s-addons.yml
+k8s_oidc_group: k8s-admins
+k8s_oidc_clusterrolebinding: oidc-k8s-admins
+k8s_oidc_kubeconfig: "{{ controller_kubeconfig }}.oidc"
+kube_oidc_client_id: kubernetes
+kube_oidc_issuer_url: "{{ oidc_issuer_url | default('') }}"

@@ -1,0 +1,12 @@
+apiVersion: externaldns.k8s.io/v1alpha1
+kind: DNSEndpoint
+metadata:
+  name: mailu-mx
+  namespace: {{ mailu_namespace }}
+spec:
+  endpoints:
+    - dnsName: {{ mailu_domain }}
+      recordTTL: 300
+      recordType: MX
+      targets:
+        - "10 {{ mailu_mx_host }}."

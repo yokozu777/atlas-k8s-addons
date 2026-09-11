@@ -1,0 +1,357 @@
+---
+# Kubernetes platform addons (atlas-k8s-addons)
+# Helm bootstrap, CNI (Calico), and platform charts after control-plane bootstrap.
+# Standalone: ./run.sh (group_vars/all/atlas-k8s-addons.yml + inventory-example.yml; see README / SECURITY.md).
+# Targeting: k8s_master_hosts / k8s_worker_hosts (inventory group names; defaults k8s_masters / k8s_workers).
+# Orchestrator labs may overlay group/host vars.
+
+- hosts: localhost
+  gather_facts: false
+  tags: [110_workspace]
+  roles:
+    - role: 110_workspace
+
+- hosts: localhost
+  connection: local
+  gather_facts: true
+  tags: [120_controller_tooling]
+  environment: "{{ controller_tls_environment | default({}) }}"
+  roles:
+    - role: 120_controller_tooling
+      tags: 120_controller_tooling
+
+- hosts: localhost
+  tags: [130_validate_vars]
+  environment: "{{ controller_tls_environment | default({}) }}"
+  roles:
+    - role: 130_validate_vars
+      tags: 130_validate_vars
+
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [140_fetch_kubeconfig]
+  environment: "{{ controller_tls_environment | default({}) }}"
+  roles:
+    - role: 140_fetch_kubeconfig
+      tags: 140_fetch_kubeconfig
+
+# Do NOT put role tags on localhost platform / vault controller plays: Ansible
+# inherits play tags onto every role, so `--tags 210_helm_bootstrap` would run
+# the entire stack. gather_facts + venv interpreter stay on tagged pre_tasks
+# so validate/tooling-only runs do not touch the controller venv.
+# Never become on localhost (krang --user has no passwd entry for sudo).
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  strategy: linear
+  become: false
+  environment: &platform_environment "{{
+      {
+        'KUBECONFIG': controller_kubeconfig,
+        'K8S_AUTH_KUBECONFIG': controller_kubeconfig,
+        'HELM_CONFIG_HOME': controller_helm_config_dir,
+        'HELM_CACHE_HOME': controller_helm_cache_dir,
+        'PATH': controller_bin_dir ~ ':/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+      } | combine(controller_tls_environment | default({}))
+    }}"
+  vars: &platform_vars
+    k8s_manifests_dir: "{{ controller_manifests_dir }}"
+    k8s_kubeconfig: "{{ controller_kubeconfig }}"
+    k8s_python_venv: "{{ controller_python_venv }}"
+    controller_helm_cache_dir: "{{ controller_helm_config_dir }}/cache"
+  pre_tasks:
+    - name: Use controller venv interpreter for platform roles
+      ansible.builtin.set_fact:
+        ansible_python_interpreter: "{{ controller_python_venv }}/bin/python"
+      tags: &platform_a_role_tags
+        - 210_helm_bootstrap
+        - 220_calico
+        - 310_prometheus
+        - 320_blackbox
+        - 330_prometheus_adapter
+        - 340_calico_metrics
+        - 410_snapshotter
+        - 420_rook_operator
+        - 430_rook_cluster
+        - 440_rook_csi_drivers
+        - 450_thanos
+        - 510_metallb
+        - 520_envoy_gateway
+        - 530_external_dns
+        - 540_cert_manager
+        - 550_trust_manager
+        - 560_apply_ingress
+        - 610_elasticsearch_prepare
+        - 620_elasticsearch
+        - 630_kibana_prepare
+        - 640_kibana
+        - 650_fluentbit
+        - 710_istio
+        - 720_external_dns_istio
+        - 730_tracing
+        - 740_kiali
+        - 800_chaos_mesh
+        - 810_falco
+        - 820_kyverno
+        - 830_policy_reporter
+        - 840_trivy
+        - 910_cloudnative_pg
+        - 920_keycloak
+        - 930_keycloak_realm
+    - name: Gather facts for platform play
+      ansible.builtin.setup:
+      tags: *platform_a_role_tags
+  roles:
+    - role: 210_helm_bootstrap
+      tags: 210_helm_bootstrap
+    - role: 220_calico
+      tags: 220_calico
+    # observability (Prometheus Operator CRDs before Rook PrometheusRule / ServiceMonitor)
+    - role: 310_prometheus
+      tags: 310_prometheus
+    - role: 320_blackbox
+      tags: 320_blackbox
+    - role: 330_prometheus_adapter
+      tags: 330_prometheus_adapter
+    - role: 340_calico_metrics
+      tags: 340_calico_metrics
+    # storage
+    - role: 410_snapshotter
+      tags: 410_snapshotter
+    - role: 420_rook_operator
+      tags: 420_rook_operator
+    - role: 430_rook_cluster
+      tags: 430_rook_cluster
+    - role: 440_rook_csi_drivers
+      tags: 440_rook_csi_drivers
+    - role: 450_thanos
+      tags: 450_thanos
+    # edge / ingress
+    - role: 510_metallb
+      tags: 510_metallb
+    - role: 520_envoy_gateway
+      tags: 520_envoy_gateway
+    - role: 530_external_dns
+      tags: 530_external_dns
+    - role: 540_cert_manager
+      tags: 540_cert_manager
+    - role: 550_trust_manager
+      tags: 550_trust_manager
+    - role: 560_apply_ingress
+      tags: 560_apply_ingress
+    - role: 610_elasticsearch_prepare
+      tags: 610_elasticsearch_prepare
+      when: elasticsearch_chart_state | default('present') == 'present'
+    - role: 620_elasticsearch
+      tags: 620_elasticsearch
+    - role: 630_kibana_prepare
+      tags: 630_kibana_prepare
+      when: kibana_chart_state | default('present') == 'present'
+    - role: 640_kibana
+      tags: 640_kibana
+    - role: 650_fluentbit
+      tags: 650_fluentbit
+    # mesh / observability: istio-system (--create-namespace) before Kiali CR;
+    # tracing before Kiali (Jaeger query wait in 740_kiali).
+    - role: 710_istio
+      tags: 710_istio
+    - role: 720_external_dns_istio
+      tags: 720_external_dns_istio
+    - role: 730_tracing
+      tags: 730_tracing
+    - role: 740_kiali
+      tags: 740_kiali
+    - role: 800_chaos_mesh
+      tags: 800_chaos_mesh
+    - role: 810_falco
+      tags: 810_falco
+    - role: 820_kyverno
+      tags: 820_kyverno
+    - role: 830_policy_reporter
+      tags: 830_policy_reporter
+    - role: 840_trivy
+      tags: 840_trivy
+    - role: 910_cloudnative_pg
+      tags: 910_cloudnative_pg
+    - role: 920_keycloak
+      tags: 920_keycloak
+    - role: 930_keycloak_realm
+      tags: 930_keycloak_realm
+      when: keycloak_chart_state | default('present') == 'present'
+
+# kube-apiserver OIDC after Keycloak realm. Not at kubeadm init (joining masters
+# would reference oidc-ca.crt before the file exists). 941 kubeconfig.oidc follows
+# so the API already has OIDC flags. 942 Pinniped (Supervisor+Concierge) is a
+# second authenticator; 940/941 stay as kubelogin break-glass.
+- hosts: "{{ (kube_apiserver_oidc_enabled | default(false) | bool) | ternary(k8s_master_hosts | default('k8s_masters'), 'localhost') }}"
+  user: "{{ k8s_admin_user | default('localuser') }}"
+  become: "{{ kube_apiserver_oidc_enabled | default(false) | bool }}"
+  gather_facts: false
+  serial: 1
+  vars: *platform_vars
+  roles:
+    - role: 940_apiserver_oidc
+      tags: 940_apiserver_oidc
+      when: keycloak_chart_state | default('present') == 'present'
+
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  strategy: linear
+  become: false
+  environment: *platform_environment
+  vars: *platform_vars
+  pre_tasks:
+    - name: Use controller venv interpreter for platform roles
+      ansible.builtin.set_fact:
+        ansible_python_interpreter: "{{ controller_python_venv }}/bin/python"
+      tags: &platform_a2_role_tags
+        - 941_k8s_oidc
+        - 942_pinniped
+        - 950_mailu
+        - 954_opencost
+        - 960_oauth2_proxy
+        - 961_apply_oidc_ingress
+        - 962_headlamp
+        - 970_consul
+    - name: Gather facts for platform play
+      ansible.builtin.setup:
+      tags: *platform_a2_role_tags
+  roles:
+    - role: 941_k8s_oidc
+      tags: 941_k8s_oidc
+      when: keycloak_chart_state | default('present') == 'present'
+    - role: 942_pinniped
+      tags: 942_pinniped
+    - role: 950_mailu
+      tags: 950_mailu
+    - role: 954_opencost
+      tags: 954_opencost
+    - role: 960_oauth2_proxy
+      tags: 960_oauth2_proxy
+    # Grafana/Headlamp/Mailu HTTPRoute + SecurityPolicy OIDC are applied in 961 after 930_keycloak_realm.
+    - role: 961_apply_oidc_ingress
+      tags: 961_apply_oidc_ingress
+    - role: 962_headlamp
+      tags: 962_headlamp
+    - role: 970_consul
+      tags: 970_consul
+
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  environment: *platform_environment
+  vars: *platform_vars
+  pre_tasks:
+    - name: Use controller venv interpreter for platform roles
+      ansible.builtin.set_fact:
+        ansible_python_interpreter: "{{ controller_python_venv }}/bin/python"
+      tags: [971_vault]
+    - name: Gather facts for platform play
+      ansible.builtin.setup:
+      tags: [971_vault]
+  roles:
+    - role: 971_vault
+      tags: 971_vault
+
+- hosts: "{{ k8s_master_hosts | default('k8s_masters') }}"
+  user: "{{ k8s_admin_user | default('localuser') }}"
+  become: true
+  become_user: root
+  gather_facts: false
+  tags: [971_vault]
+  vars: *platform_vars
+  tasks:
+    - name: keys_collect - fetch unseal keys from masters
+      ansible.builtin.import_role:
+        name: 971_vault
+        tasks_from: keys_collect.yml
+      when: vault_chart_state | default('present') == 'present'
+
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  environment: *platform_environment
+  vars: *platform_vars
+  pre_tasks:
+    - name: Use controller venv interpreter for platform roles
+      ansible.builtin.set_fact:
+        ansible_python_interpreter: "{{ controller_python_venv }}/bin/python"
+      tags: [971_vault]
+    - name: Gather facts for platform play
+      ansible.builtin.setup:
+      tags: [971_vault]
+  tasks:
+    - name: unseal - init and bootstrap Vault
+      ansible.builtin.import_role:
+        name: 971_vault
+        tasks_from: unseal.yml
+      tags: 971_vault
+      when: vault_chart_state | default('present') == 'present'
+
+- hosts: "{{ k8s_master_hosts | default('k8s_masters') }}"
+  user: "{{ k8s_admin_user | default('localuser') }}"
+  become: true
+  become_user: root
+  gather_facts: false
+  tags: [971_vault]
+  vars: *platform_vars
+  tasks:
+    - name: keys_distribute - copy unseal keys to masters
+      ansible.builtin.import_role:
+        name: 971_vault
+        tasks_from: keys_distribute.yml
+      when: vault_chart_state | default('present') == 'present'
+
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  strategy: linear
+  become: false
+  environment: *platform_environment
+  vars: *platform_vars
+  pre_tasks:
+    - name: Use controller venv interpreter for platform roles
+      ansible.builtin.set_fact:
+        ansible_python_interpreter: "{{ controller_python_venv }}/bin/python"
+      tags: &platform_b_role_tags
+        - 972_external_secrets
+        - 980_argocd
+        - 982_argocd_rollouts
+        - 990_rook_ceph_dashboard
+        - 992_kibana_dashboards
+        - 994_sentry
+        - 996_cluster_report
+    - name: Gather facts for platform play
+      ansible.builtin.setup:
+      tags: *platform_b_role_tags
+  roles:
+    - role: 972_external_secrets
+      tags: 972_external_secrets
+    # Heavy charts after lighter platform services (API/etcd load).
+    - role: 980_argocd
+      tags: 980_argocd
+    - role: 982_argocd_rollouts
+      tags: 982_argocd_rollouts
+    - role: 990_rook_ceph_dashboard
+      tags: 990_rook_ceph_dashboard
+      when: rook_cluster_chart_state | default('present') == 'present'
+    - role: 992_kibana_dashboards
+      tags: 992_kibana_dashboards
+      when: kibana_chart_state | default('present') == 'present'
+    - role: 994_sentry
+      tags: 994_sentry
+    - role: 996_cluster_report
+      tags: 996_cluster_report
+
+- hosts: "{{ k8s_master_hosts | default('k8s_masters') }}:{{ k8s_worker_hosts | default('k8s_workers') }}"
+  user: "{{ k8s_admin_user | default('localuser') }}"
+  become: true
+  gather_facts: true
+  tags: [999_debug_tooling]
+  roles:
+    - role: 999_debug_tooling
+      tags: 999_debug_tooling

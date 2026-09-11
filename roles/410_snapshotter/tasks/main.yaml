@@ -1,0 +1,11 @@
+---
+- name: Fetch external-snapshotter from git
+  ansible.builtin.import_tasks: fetch_git.yaml
+  when: get_snapshotter in ['github', 'private-git']
+
+- name: Fetch external-snapshotter from internal static nginx
+  ansible.builtin.import_tasks: fetch_internal.yaml
+  when: get_snapshotter == 'internal-nginx'
+
+- name: Install external-snapshotter CRDs and controller
+  ansible.builtin.import_tasks: install.yaml

@@ -1,0 +1,65 @@
+---
+- name: Skip Kubernetes OIDC kubeconfig when disabled
+  ansible.builtin.debug:
+    msg: kube_apiserver_oidc_enabled is false; not applying OIDC RBAC or kubeconfig.oidc
+  when: not (kube_apiserver_oidc_enabled | default(false) | bool)
+
+- name: Configure Kubernetes OIDC RBAC and client kubeconfig
+  when: kube_apiserver_oidc_enabled | default(false) | bool
+  block:
+    - name: Ensure controller kubeconfig before OIDC RBAC
+      ansible.builtin.import_role:
+        name: 140_fetch_kubeconfig
+
+    - name: Stat controller kubeconfig for OIDC
+      ansible.builtin.stat:
+        path: "{{ controller_kubeconfig }}"
+      register: k8s_oidc_controller_kubeconfig_stat
+
+    - name: Assert controller kubeconfig is available for OIDC
+      ansible.builtin.assert:
+        that:
+          - k8s_oidc_controller_kubeconfig_stat.stat.exists | default(false) | bool
+          - k8s_oidc_controller_kubeconfig_stat.stat.size | default(0) | int > 0
+        fail_msg: >-
+          Kubeconfig {{ controller_kubeconfig }} is missing or empty on the Ansible controller.
+          Run atlas-k8s-core (29_fetch_kubeconfig) or ensure SSH access to the first control-plane
+          node so 140_fetch_kubeconfig can pull /etc/kubernetes/admin.conf.
+
+    - name: Apply ClusterRoleBinding mapping OIDC group to cluster-admin
+      kubernetes.core.k8s:
+        kubeconfig: "{{ controller_kubeconfig }}"
+        state: present
+        definition: "{{ lookup('ansible.builtin.template', 'oidc-k8s-admins.yaml.j2') | from_yaml }}"
+      environment:
+        KUBECONFIG: "{{ controller_kubeconfig }}"
+
+    - name: Load admin kubeconfig for OIDC context
+      ansible.builtin.slurp:
+        src: "{{ controller_kubeconfig }}"
+      register: k8s_oidc_admin_kubeconfig_b64
+
+    - name: Parse admin kubeconfig
+      ansible.builtin.set_fact:
+        k8s_oidc_admin_kubeconfig: "{{ k8s_oidc_admin_kubeconfig_b64.content | b64decode | from_yaml }}"
+
+    - name: Resolve OIDC kubeconfig cluster fields
+      ansible.builtin.set_fact:
+        k8s_oidc_cluster_name: "{{ k8s_oidc_admin_kubeconfig.clusters[0].name }}"
+        k8s_oidc_cluster_server: "{{ k8s_oidc_admin_kubeconfig.clusters[0].cluster.server }}"
+        k8s_oidc_cluster_ca_data: "{{ k8s_oidc_admin_kubeconfig.clusters[0].cluster['certificate-authority-data'] }}"
+
+    - name: Slurp lab root CA for kubelogin (Keycloak TLS, not kube-apiserver CA)
+      ansible.builtin.slurp:
+        src: "{{ controller_ca_cert_path }}"
+      register: k8s_oidc_lab_ca
+
+    - name: Set kubelogin issuer CA data
+      ansible.builtin.set_fact:
+        k8s_oidc_issuer_ca_data: "{{ k8s_oidc_lab_ca.content }}"
+
+    - name: Write OIDC kubeconfig next to admin kubeconfig
+      ansible.builtin.template:
+        src: kubeconfig.oidc.j2
+        dest: "{{ k8s_oidc_kubeconfig }}"
+        mode: "0600"

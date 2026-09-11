@@ -1,0 +1,157 @@
+---
+- name: Default Elasticsearch S3 snapshot facts
+  ansible.builtin.set_fact:
+    elasticsearch_s3_ready: false
+    elasticsearch_s3_client_endpoint: ""
+    elasticsearch_s3_client_protocol: "{{ elasticsearch_snapshot_s3_protocol | default('https') }}"
+    elasticsearch_s3_bucket: "{{ elasticsearch_snapshot_s3_bucket | default('') }}"
+    elasticsearch_s3_region: us-east-1
+
+- name: Probe snapshot StorageClass for Rook RGW
+  when:
+    - elasticsearch_snapshot_backend | default('rook-rgw') == 'rook-rgw'
+    - rook_cluster_chart_state | default('present') == 'present'
+  kubernetes.core.k8s_info:
+    api_version: storage.k8s.io/v1
+    kind: StorageClass
+    name: "{{ elasticsearch_snapshot_storage_class }}"
+  register: es_snapshot_sc
+  retries: 60
+  delay: 10
+  until: es_snapshot_sc.resources | default([]) | length > 0
+  failed_when: false
+  ignore_errors: true
+
+- name: Skip SLM when Rook bucket StorageClass is missing
+  when:
+    - elasticsearch_snapshot_backend | default('rook-rgw') == 'rook-rgw'
+    - rook_cluster_chart_state | default('present') == 'present'
+    - es_snapshot_sc.resources | default([]) | length == 0
+  ansible.builtin.debug:
+    msg: >-
+      StorageClass {{ elasticsearch_snapshot_storage_class }} not found;
+      ILM will still apply, SLM/S3 is skipped
+
+- name: Apply ObjectBucketClaim for Elasticsearch snapshots
+  when:
+    - elasticsearch_snapshot_backend | default('rook-rgw') == 'rook-rgw'
+    - es_snapshot_sc.resources | default([]) | length > 0
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: objectbucket.io/v1alpha1
+      kind: ObjectBucketClaim
+      metadata:
+        name: "{{ elasticsearch_snapshot_obc_name }}"
+        namespace: "{{ logging_namespace }}"
+      spec:
+        generateBucketName: "{{ elasticsearch_snapshot_obc_name }}"
+        storageClassName: "{{ elasticsearch_snapshot_storage_class }}"
+
+- name: Wait for ObjectBucketClaim Secret
+  when:
+    - elasticsearch_snapshot_backend | default('rook-rgw') == 'rook-rgw'
+    - es_snapshot_sc.resources | default([]) | length > 0
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ elasticsearch_snapshot_obc_name }}"
+    namespace: "{{ logging_namespace }}"
+  register: es_obc_secret
+  retries: 180
+  delay: 10
+  until: es_obc_secret.resources | default([]) | length > 0
+  no_log: true
+
+- name: Wait for ObjectBucketClaim ConfigMap
+  when:
+    - elasticsearch_snapshot_backend | default('rook-rgw') == 'rook-rgw'
+    - es_snapshot_sc.resources | default([]) | length > 0
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    name: "{{ elasticsearch_snapshot_obc_name }}"
+    namespace: "{{ logging_namespace }}"
+  register: es_obc_cm
+  retries: 180
+  delay: 10
+  until: es_obc_cm.resources | default([]) | length > 0
+
+- name: Build Elasticsearch S3 keystore Secret from Rook OBC
+  when:
+    - elasticsearch_snapshot_backend | default('rook-rgw') == 'rook-rgw'
+    - es_obc_secret.resources | default([]) | length > 0
+    - es_obc_cm.resources | default([]) | length > 0
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "{{ elasticsearch_s3_credentials_secret }}"
+        namespace: "{{ logging_namespace }}"
+      type: Opaque
+      stringData:
+        s3.client.default.access_key: "{{ es_obc_secret.resources[0].data.AWS_ACCESS_KEY_ID | b64decode }}"
+        s3.client.default.secret_key: "{{ es_obc_secret.resources[0].data.AWS_SECRET_ACCESS_KEY | b64decode }}"
+  no_log: true
+
+- name: Set Elasticsearch S3 facts from Rook OBC
+  when:
+    - elasticsearch_snapshot_backend | default('rook-rgw') == 'rook-rgw'
+    - es_obc_cm.resources | default([]) | length > 0
+  ansible.builtin.set_fact:
+    elasticsearch_s3_ready: true
+    elasticsearch_s3_client_endpoint: "{{ es_obc_cm.resources[0].data.BUCKET_HOST }}:{{ es_obc_cm.resources[0].data.BUCKET_PORT | default('80') }}"
+    elasticsearch_s3_client_protocol: http
+    elasticsearch_s3_bucket: "{{ es_obc_cm.resources[0].data.BUCKET_NAME }}"
+    elasticsearch_s3_region: "{{ es_obc_cm.resources[0].data.BUCKET_REGION | default('us-east-1', true) }}"
+
+- name: Require Rook OBC bucket coordinates
+  when:
+    - elasticsearch_snapshot_backend | default('rook-rgw') == 'rook-rgw'
+    - elasticsearch_s3_ready | default(false) | bool
+  ansible.builtin.assert:
+    that:
+      - elasticsearch_s3_bucket | default('') | length > 0
+      - elasticsearch_s3_client_endpoint | default('') | length > 3
+    fail_msg: ObjectBucketClaim ConfigMap missing BUCKET_HOST or BUCKET_NAME
+
+- name: Build Elasticsearch S3 keystore Secret from external-s3 overlay
+  when:
+    - elasticsearch_snapshot_backend | default('rook-rgw') == 'external-s3'
+    - elasticsearch_snapshot_s3_endpoint | default('') | length > 0
+    - elasticsearch_snapshot_s3_bucket | default('') | length > 0
+    - elasticsearch_snapshot_s3_access_key | default('') | length > 0
+    - elasticsearch_snapshot_s3_secret_key | default('') | length > 0
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "{{ elasticsearch_s3_credentials_secret }}"
+        namespace: "{{ logging_namespace }}"
+      type: Opaque
+      stringData:
+        s3.client.default.access_key: "{{ elasticsearch_snapshot_s3_access_key }}"
+        s3.client.default.secret_key: "{{ elasticsearch_snapshot_s3_secret_key }}"
+  no_log: true
+
+- name: Set Elasticsearch S3 facts from external-s3 overlay
+  when:
+    - elasticsearch_snapshot_backend | default('rook-rgw') == 'external-s3'
+    - elasticsearch_snapshot_s3_endpoint | default('') | length > 0
+    - elasticsearch_snapshot_s3_bucket | default('') | length > 0
+    - elasticsearch_snapshot_s3_access_key | default('') | length > 0
+    - elasticsearch_snapshot_s3_secret_key | default('') | length > 0
+  ansible.builtin.set_fact:
+    elasticsearch_s3_ready: true
+    elasticsearch_s3_client_endpoint: "{{ elasticsearch_snapshot_s3_endpoint }}"
+    elasticsearch_s3_client_protocol: "{{ elasticsearch_snapshot_s3_protocol | default('https') }}"
+    elasticsearch_s3_bucket: "{{ elasticsearch_snapshot_s3_bucket }}"
+
+- name: Skip SLM when snapshot backend is none
+  when: elasticsearch_snapshot_backend | default('rook-rgw') == 'none'
+  ansible.builtin.debug:
+    msg: elasticsearch_snapshot_backend=none; ILM will still apply, SLM/S3 is skipped

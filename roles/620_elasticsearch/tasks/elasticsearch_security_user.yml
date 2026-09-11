@@ -1,0 +1,30 @@
+---
+# POST /_security/user. uri stays no_log (url_password and body password).
+# Follow-up fail prints HTTP status + ES JSON so 401s are visible.
+- name: "{{ elasticsearch_user_title }}"
+  ansible.builtin.uri:
+    validate_certs: false
+    url: "https://{{ elasticsearch_host }}/_security/user/{{ elasticsearch_user_name }}?pretty"
+    method: POST
+    url_username: "{{ k8s_users.elastic_superuser }}"
+    url_password: "{{ k8s_secrets.elastic_password }}"
+    force_basic_auth: true
+    body:
+      password: "{{ elasticsearch_user_password }}"
+      roles: ["superuser"]
+    body_format: json
+    headers:
+      Content-Type: "application/json"
+  register: elasticsearch_user_result
+  no_log: true
+  failed_when: false
+  retries: "{{ elasticsearch_user_retries | default(30) }}"
+  delay: "{{ elasticsearch_user_delay | default(5) }}"
+  until: elasticsearch_user_result.status | default(0) in [200, 201]
+
+- name: Fail if {{ elasticsearch_user_title }} was rejected
+  ansible.builtin.fail:
+    msg: >-
+      {{ elasticsearch_user_title }} HTTP {{ elasticsearch_user_result.status | default('n/a') }}:
+      {{ elasticsearch_user_result.json | default(elasticsearch_user_result.content) | default(elasticsearch_user_result.msg) | default('') }}
+  when: elasticsearch_user_result.status | default(0) not in [200, 201]

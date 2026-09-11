@@ -1,0 +1,209 @@
+configs:
+  params:
+    server.insecure: true
+  cm:
+    url: https://{{ argocd_host }}
+    oidc.config: |
+      name: Keycloak
+      issuer: {{ oidc_issuer_url }}
+      clientID: argocd
+      clientSecret: $oidc.keycloak.clientSecret
+      requestedScopes:
+        - openid
+        - profile
+        - email
+      logoutURL: {{ oidc_issuer_url }}/protocol/openid-connect/logout?id_token_hint={{ '{{token}}' }}&post_logout_redirect_uri={{ '{{logoutRedirectURL}}' }}&client_id=argocd
+      rootCA: |
+{{ lookup('file', k8s_manifests_dir ~ '/internal-ca.pem') | indent(8, true) }}
+  secret:
+    argocdServerAdminPassword: "{{ k8s_secrets.argocd_admin_password_bcrypt }}"
+    extra:
+      oidc.keycloak.clientSecret: "{{ k8s_secrets.argocd_oidc_client_secret }}"
+  rbac:
+    policy.default: ''
+    policy.csv: |
+      g, argocd-admins, role:admin
+    scopes: '[groups]'
+
+redis-ha:
+  enabled: true
+  image:
+    # -- Redis repository
+    repository: redis
+  # Chart default is AWS Public ECR (registry:3 cannot cache those blobs).
+  haproxy:
+    image:
+      repository: docker.io/library/haproxy
+      tag: "3.3.10-alpine"
+    # 25% of 3 replicas rounds maxUnavailable to 0; hard anti-affinity then deadlocks.
+    deploymentStrategy:
+      type: RollingUpdate
+      rollingUpdate:
+        maxSurge: 1
+        maxUnavailable: 1
+  exporter:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+
+controller:
+  replicas: 3
+  resources:
+   limits:
+     cpu: 500m
+     memory: 2012Mi
+   requests:
+     cpu: 250m
+     memory: 256Mi  
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      relabelings:
+        - action: replace
+          replacement: argocd-application-controller-metrics
+          targetLabel: job
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    # -- Minimum number of replicas for the Argo CD server [HPA]
+    # -- Maximum number of replicas for the Argo CD server [HPA]
+    maxReplicas: 3
+    # -- Average CPU utilization percentage for the Argo CD server [HPA]
+    targetCPUUtilizationPercentage: 50
+    # -- Average memory utilization percentage for the Argo CD server [HPA]
+    targetMemoryUtilizationPercentage: 50
+  volumeMounts:
+    - mountPath: /etc/ssl/certs/{{ k8s_ca_cert_filename }}
+      name: ca
+      subPath: {{ k8s_ca_cert_filename }}
+  # -- Additional volumes to the Repo Server pod
+  volumes:
+    - name: ca
+      secret:
+        secretName: ca            
+
+dex:
+  enabled: false
+  metrics:
+    # -- Deploy metrics service
+    enabled: true
+  resources:
+   limits:
+     cpu: 250m
+     memory: 128Mi
+   requests:
+     cpu: 10m
+     memory: 32Mi
+
+server:
+  resources:
+   limits:
+     cpu: 500m
+     memory: 528Mi
+   requests:
+     cpu: 50m
+     memory: 128Mi
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      relabelings:
+        - action: replace
+          replacement: argocd-server-metrics
+          targetLabel: job
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    # -- Minimum number of replicas for the Argo CD server [HPA]
+    # -- Maximum number of replicas for the Argo CD server [HPA]
+    maxReplicas: 3
+    # -- Average CPU utilization percentage for the Argo CD server [HPA]
+    targetCPUUtilizationPercentage: 50
+    # -- Average memory utilization percentage for the Argo CD server [HPA]
+    targetMemoryUtilizationPercentage: 50    
+  volumeMounts:
+    - mountPath: /etc/ssl/certs/{{ k8s_ca_cert_filename }}
+      name: ca
+      subPath: {{ k8s_ca_cert_filename }}
+  # -- Additional volumes to the Repo Server pod
+  volumes:
+    - name: ca
+      secret:
+        secretName: ca
+
+repoServer:
+  resources:
+   limits:
+     cpu: 500m
+     memory: 512Mi
+   requests:
+     cpu: 10m
+     memory: 128Mi
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      relabelings:
+        - action: replace
+          replacement: argocd-repo-server-metrics
+          targetLabel: job
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    # -- Minimum number of replicas for the Argo CD server [HPA]
+    # -- Maximum number of replicas for the Argo CD server [HPA]
+    maxReplicas: 3
+    # -- Average CPU utilization percentage for the Argo CD server [HPA]
+    targetCPUUtilizationPercentage: 50
+    # -- Average memory utilization percentage for the Argo CD server [HPA]
+    targetMemoryUtilizationPercentage: 50
+  # -- Additional volumeMounts to the Repo Server main container
+  volumeMounts:
+    - mountPath: /etc/ssl/certs/{{ k8s_ca_cert_filename }}
+      name: ca
+      subPath: {{ k8s_ca_cert_filename }}
+  volumes:
+    - name: ca
+      secret:
+        secretName: ca
+
+applicationSet:
+  resources:
+    limits:
+      cpu: 200m
+      memory: 728Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      relabelings:
+        - action: replace
+          replacement: argocd-applicationset-controller-metrics
+          targetLabel: job
+  replicas: 3
+
+notifications:
+  resources:
+    limits:
+      cpu: 100m
+      memory: 128Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  # -- Enable notifications controller
+  enabled: true
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      relabelings:
+        - action: replace
+          replacement: argocd-notifications-controller-metrics
+          targetLabel: job
+
+global:
+  addPrometheusAnnotations: false

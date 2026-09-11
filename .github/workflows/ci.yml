@@ -1,0 +1,76 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: unit + syntax + ansible-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Ansible tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "ansible-core>=2.16,<2.21" -r requirements-dev.txt
+
+      - name: Install Galaxy collections
+        run: ansible-galaxy collection install -r requirements.yml
+
+      - name: Unit tests (layout / contracts)
+        run: python -m unittest discover -s tests -v
+
+      - name: Ansible syntax-check
+        run: |
+          ansible-playbook --syntax-check \
+            -i inventory-example.yml \
+            playbooks/cluster_addons.yaml
+
+      - name: ansible-lint (min profile)
+        run: ansible-lint --profile min
+
+      - name: Org hostname hardcode scan
+        run: ./scripts/check-no-hardcoded-domains.sh
+
+      - name: Publish hygiene smoke
+        run: |
+          test -f LICENSE
+          test -f SECURITY.md
+          test -f run.sh
+          test -x run.sh
+          test -x tests/run_ci.sh
+          test -x scripts/check-no-hardcoded-domains.sh
+          test -f inventory-example.yml
+          test -f group_vars/all/atlas-k8s-addons.yml
+          test -f group_vars/all/atlas-k8s-addons.secrets.yml
+          test -f .ansible-lint
+          test -f requirements-dev.txt
+          if grep -RIn --exclude-dir=.git --exclude-dir=workspace \
+            -e 'Welcomeback' -e 'BEGIN OPENSSH PRIVATE' -e 'BEGIN RSA PRIVATE' -e 'gldt-' \
+            -- roles playbooks group_vars examples inventory-example.yml run.sh; then
+            echo "possible secret material in tracked sources"
+            exit 1
+          fi
+          if grep -RIn --exclude-dir=.git --exclude=SECURITY.md --exclude='*test*.py' \
+            --exclude='check-no-hardcoded-domains.sh' \
+            -e 'mxhash' -- roles playbooks group_vars examples inventory-example.yml; then
+            echo "org fingerprint mxhash found outside docs/tests"
+            exit 1
+          fi

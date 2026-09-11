@@ -1,0 +1,6 @@
+# Optional per-host overrides.
+# Copy to host_vars/<inventory_hostname>.yml (host_vars/* is gitignored except examples).
+#
+# hostname: master1.k8s.example.com
+# ansible_user: localuser
+# ansible_port: 22

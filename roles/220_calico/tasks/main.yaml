@@ -1,0 +1,332 @@
+    - name: Remove Calico Helm chart (absent)
+      when: calico_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent_calico.yaml"
+
+
+    - name: Install/configure calico chart
+      when: calico_chart_state | default('present') == 'present'
+      block:
+        - name: Template Calico Helm values
+          ansible.builtin.template:
+            src: calico.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/calico.yaml"
+            mode: '0644'
+    
+        - name: Check if Calico operator CRD is installed
+          ansible.builtin.command: kubectl get crd installations.operator.tigera.io
+          environment:
+            KUBECONFIG: "{{ k8s_kubeconfig }}"
+          register: calico_crd_check
+          changed_when: false
+          failed_when: false
+    
+        - name: Read applied Calico CRDs chart version marker
+          ansible.builtin.slurp:
+            src: "{{ k8s_manifests_dir }}/.calico-crds-version"
+          register: calico_crds_version_file
+          failed_when: false
+    
+        - name: Resolve Calico CRDs apply mode
+          ansible.builtin.set_fact:
+            calico_crds_applied_version: >-
+              {{
+                (calico_crds_version_file.content | b64decode | trim)
+                if (
+                  calico_crds_version_file is defined
+                  and calico_crds_version_file.content is defined
+                  and (calico_crds_version_file.content | length) > 0
+                )
+                else ''
+              }}
+            calico_crds_needs_apply: >-
+              {{
+                (calico_crd_check.rc | default(1)) != 0
+                or (
+                  (
+                    (calico_crds_version_file.content | b64decode | trim)
+                    if (
+                      calico_crds_version_file is defined
+                      and calico_crds_version_file.content is defined
+                      and (calico_crds_version_file.content | length) > 0
+                    )
+                    else ''
+                  ) != (calico_chart_version | trim)
+                )
+              }}
+            calico_crds_force_conflicts: >-
+              {{
+                (calico_crd_check.rc | default(1)) == 0
+                and (
+                  (
+                    (calico_crds_version_file.content | b64decode | trim)
+                    if (
+                      calico_crds_version_file is defined
+                      and calico_crds_version_file.content is defined
+                      and (calico_crds_version_file.content | length) > 0
+                    )
+                    else ''
+                  ) != (calico_chart_version | trim)
+                )
+              }}
+    
+        - name: Apply Calico CRDs (install or version upgrade)
+          ansible.builtin.shell: |
+            set -o pipefail
+            helm template calico-crds projectcalico/projectcalico.org.v3 {{ calico_chart_version | helm_chart_version_args }} \
+              | kubectl apply --server-side{% if calico_crds_force_conflicts | bool %} --force-conflicts{% endif %} -f -
+          args:
+            executable: /bin/bash
+          environment: "{{ _helm_kube_env }}"
+          register: calico_crds_apply
+          when: calico_crds_needs_apply | bool
+          changed_when: calico_crds_apply.rc == 0
+    
+        - name: Skip Calico CRDs apply on unchanged version
+          ansible.builtin.debug:
+            msg: >-
+              Calico CRDs chart {{ calico_chart_version }} already applied
+              (marker={{ calico_crds_applied_version }}); skipping CRD apply
+          when: not (calico_crds_needs_apply | bool)
+    
+        - name: Record applied Calico CRDs chart version
+          ansible.builtin.copy:
+            dest: "{{ k8s_manifests_dir }}/.calico-crds-version"
+            content: "{{ calico_chart_version | trim }}\n"
+            mode: '0644'
+          when:
+            - calico_crds_needs_apply | bool
+            - calico_crds_apply is defined
+            - calico_crds_apply.rc | default(1) == 0
+    
+        - name: Check if {{ calico_operator_namespace }} Helm release exists
+          ansible.builtin.command: >-
+            helm list -n {{ calico_operator_namespace }} -o json -f ^tigera-operator$
+          environment:
+            KUBECONFIG: "{{ k8s_kubeconfig }}"
+          register: calico_operator_release_json
+          changed_when: false
+          failed_when: false
+    
+        - name: Stat rendered Calico installation values
+          ansible.builtin.stat:
+            path: "{{ k8s_manifests_dir }}/calico.yaml"
+            checksum_algorithm: sha1
+          register: calico_values_stat
+    
+        - name: Read Calico installation values checksum marker
+          ansible.builtin.slurp:
+            src: "{{ k8s_manifests_dir }}/.calico-installation-values-checksum"
+          register: calico_values_checksum_file
+          failed_when: false
+
+        - name: Read Calico runtime version from Installation CR
+          ansible.builtin.command: >-
+            kubectl get installation default
+            -o jsonpath={.status.calicoVersion}
+          environment:
+            KUBECONFIG: "{{ k8s_kubeconfig }}"
+          register: calico_runtime_version_cmd
+          changed_when: false
+          failed_when: false
+          when: (calico_operator_release_json.stdout | default('[]') | from_json | length) > 0
+    
+        - name: Resolve Calico operator helm mode
+          ansible.builtin.set_fact:
+            calico_operator_release: >-
+              {{ (calico_operator_release_json.stdout | default('[]') | from_json | first) | default({}) }}
+            calico_operator_release_exists: >-
+              {{ (calico_operator_release_json.stdout | default('[]') | from_json | length) > 0 }}
+            calico_operator_installed_version: >-
+              {{
+                (
+                  (calico_operator_release_json.stdout | default('[]') | from_json | first | default({})).chart
+                  | default('')
+                  | regex_replace('^tigera-operator-', '')
+                )
+                if (calico_operator_release_json.stdout | default('[]') | from_json | length) > 0
+                else ''
+              }}
+            calico_operator_helm_status: >-
+              {{
+                (calico_operator_release_json.stdout | default('[]') | from_json | first | default({})).status
+                | default('')
+              }}
+            calico_runtime_version: >-
+              {{
+                (calico_runtime_version_cmd.stdout | default('') | trim)
+                if (
+                  calico_runtime_version_cmd is defined
+                  and not (calico_runtime_version_cmd.skipped | default(false) | bool)
+                )
+                else ''
+              }}
+            calico_values_changed: >-
+              {{
+                (
+                  calico_values_checksum_file is defined
+                  and calico_values_checksum_file.content is defined
+                  and (calico_values_checksum_file.content | length) > 0
+                  and calico_values_stat.stat.checksum | default('')
+                  != (calico_values_checksum_file.content | b64decode | trim)
+                )
+              }}
+    
+        - name: Resolve Calico operator helm actions
+          ansible.builtin.set_fact:
+            calico_operator_needs_initial_install: >-
+              {{ not (calico_operator_release_exists | bool) }}
+            calico_operator_chart_version_changed: >-
+              {{
+                (calico_operator_release_exists | bool)
+                and (calico_operator_installed_version | trim) != (calico_chart_version | trim)
+              }}
+            calico_runtime_version_drifts: >-
+              {{
+                (calico_operator_release_exists | bool)
+                and (calico_runtime_version | default('') | length) > 0
+                and (
+                  (calico_runtime_version | trim | regex_replace('^v', ''))
+                  != (calico_chart_version | trim | regex_replace('^v', ''))
+                )
+              }}
+
+        - name: Resolve Calico operator helm reconcile flags
+          ansible.builtin.set_fact:
+            calico_operator_needs_chart_reconcile: >-
+              {{
+                (calico_operator_chart_version_changed | bool)
+                or (calico_runtime_version_drifts | bool)
+              }}
+            calico_operator_skip_helm: >-
+              {{
+                (calico_operator_release_exists | bool)
+                and (calico_operator_installed_version | trim) == (calico_chart_version | trim)
+                and (calico_operator_helm_status | trim) == 'deployed'
+                and not (calico_values_changed | bool)
+                and not (calico_runtime_version_drifts | bool)
+              }}
+            calico_operator_needs_helm_upgrade: >-
+              {{
+                (calico_operator_release_exists | bool)
+                and not (
+                  (calico_operator_installed_version | trim) == (calico_chart_version | trim)
+                  and (calico_operator_helm_status | trim) == 'deployed'
+                  and not (calico_values_changed | bool)
+                  and not (calico_runtime_version_drifts | bool)
+                )
+              }}
+    
+        - name: Seed Calico installation values checksum marker on existing release
+          ansible.builtin.copy:
+            dest: "{{ k8s_manifests_dir }}/.calico-installation-values-checksum"
+            content: "{{ calico_values_stat.stat.checksum }}\n"
+            mode: '0644'
+          when:
+            - calico_operator_release_exists | bool
+            - calico_values_stat.stat.checksum is defined
+            - not (
+                calico_values_checksum_file is defined
+                and calico_values_checksum_file.content is defined
+                and (calico_values_checksum_file.content | length) > 0
+              )
+    
+        - name: Skip Calico operator helm on unchanged release
+          ansible.builtin.debug:
+            msg: >-
+              {{ calico_operator_namespace }} chart={{ calico_operator_installed_version }}
+              runtime={{ calico_runtime_version | default('unknown') }} already match
+              {{ calico_chart_version }}; skipping helm upgrade
+          when: calico_operator_skip_helm | bool
+    
+        - name: Helming Calico operator (initial install)
+          ansible.builtin.command: >-
+            helm upgrade --install tigera-operator
+            projectcalico/tigera-operator
+            --namespace {{ calico_operator_namespace }}
+            --create-namespace
+            {{ calico_chart_version | helm_chart_version_args }}
+            -f {{ k8s_manifests_dir }}/calico.yaml
+          environment: "{{ _helm_kube_env }}"
+          register: calico_operator_helm_initial
+          when: calico_operator_needs_initial_install | bool
+          changed_when: calico_operator_helm_initial.rc == 0
+    
+        - name: Helming Calico operator (chart version bump)
+          ansible.builtin.command: >-
+            helm upgrade --install tigera-operator
+            projectcalico/tigera-operator
+            --namespace {{ calico_operator_namespace }}
+            --create-namespace
+            {{ calico_chart_version | helm_chart_version_args }}
+            -f {{ k8s_manifests_dir }}/calico.yaml
+            --force-conflicts
+          environment: "{{ _helm_kube_env }}"
+          register: calico_operator_helm_chart_bump
+          when:
+            - calico_operator_needs_helm_upgrade | bool
+            - not (calico_operator_needs_initial_install | bool)
+            - calico_operator_needs_chart_reconcile | bool
+          changed_when: calico_operator_helm_chart_bump.rc == 0
+
+        - name: Helming Calico operator (upgrade with values sync)
+          ansible.builtin.command: >-
+            helm upgrade --install tigera-operator
+            projectcalico/tigera-operator
+            --namespace {{ calico_operator_namespace }}
+            --create-namespace
+            {{ calico_chart_version | helm_chart_version_args }}
+            -f {{ k8s_manifests_dir }}/calico.yaml
+            --reuse-values
+            --force-conflicts
+          environment: "{{ _helm_kube_env }}"
+          register: calico_operator_helm_values_sync
+          when:
+            - calico_operator_needs_helm_upgrade | bool
+            - not (calico_operator_needs_initial_install | bool)
+            - not (calico_operator_needs_chart_reconcile | bool)
+            - calico_values_changed | bool
+          changed_when: calico_operator_helm_values_sync.rc == 0
+
+        - name: Helming Calico operator (heal release)
+          ansible.builtin.command: >-
+            helm upgrade --install tigera-operator
+            projectcalico/tigera-operator
+            --namespace {{ calico_operator_namespace }}
+            --create-namespace
+            {{ calico_chart_version | helm_chart_version_args }}
+            --reuse-values
+            --force-conflicts
+          environment: "{{ _helm_kube_env }}"
+          register: calico_operator_helm_heal
+          when:
+            - calico_operator_needs_helm_upgrade | bool
+            - not (calico_operator_needs_initial_install | bool)
+            - not (calico_operator_needs_chart_reconcile | bool)
+            - not (calico_values_changed | bool)
+          changed_when: calico_operator_helm_heal.rc == 0
+    
+        - name: Record applied Calico installation values checksum
+          ansible.builtin.copy:
+            dest: "{{ k8s_manifests_dir }}/.calico-installation-values-checksum"
+            content: "{{ calico_values_stat.stat.checksum }}\n"
+            mode: '0644'
+          when:
+            - calico_values_stat.stat.checksum is defined
+            - >-
+              (calico_operator_helm_initial is defined and calico_operator_helm_initial.rc | default(1) == 0)
+              or (calico_operator_helm_chart_bump is defined and calico_operator_helm_chart_bump.rc | default(1) == 0)
+              or (calico_operator_helm_values_sync is defined and calico_operator_helm_values_sync.rc | default(1) == 0)
+              or (calico_operator_helm_heal is defined and calico_operator_helm_heal.rc | default(1) == 0)
+              or (calico_operator_skip_helm | default(false) | bool)
+    
+        - name: Wait until all nodes are Ready
+          ansible.builtin.shell: |
+            kubectl get nodes --no-headers | awk '$2 != "Ready" { exit 1 }'
+          environment:
+            KUBECONFIG: "{{ k8s_kubeconfig }}"
+          register: wait_ready
+          retries: 180
+          delay: 3
+          until: wait_ready.rc == 0
+          changed_when: false
+

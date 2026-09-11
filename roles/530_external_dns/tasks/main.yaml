@@ -1,0 +1,66 @@
+    - name: Remove external-dns Helm chart (absent)
+      when: external_dns_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: external-dns
+            namespace: "{{ external_dns_namespace }}"
+          - name: external-dns-apex
+            namespace: "{{ external_dns_namespace }}"
+        helm_chart_absent_delete_namespace: true
+        helm_chart_absent_namespaces:
+          - "{{ external_dns_namespace }}"
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/external-dns.yaml"
+          - "{{ k8s_manifests_dir }}/external-dns-apex.yaml"
+    - name: Install/configure external-dns chart
+      when: external_dns_chart_state | default('present') == 'present'
+      block:
+        - name: Render external-dns helm values
+          ansible.builtin.template:
+            src: external-dns.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/external-dns.yaml"
+            mode: '0644'
+
+        - name: Helming external-dns
+          ansible.builtin.command: >-
+            helm upgrade --install {{ item }}
+            --create-namespace
+            {{ external_dns_chart_version | helm_chart_version_args }}
+          loop:
+            - external-dns external-dns/external-dns -f {{ k8s_manifests_dir }}/external-dns.yaml --namespace {{ external_dns_namespace }}
+
+        - name: Render external-dns apex helm values
+          ansible.builtin.template:
+            src: external-dns-apex.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/external-dns-apex.yaml"
+            mode: "0644"
+
+        - name: Helming external-dns-apex
+          ansible.builtin.command: >-
+            helm upgrade --install external-dns-apex
+            external-dns/external-dns
+            --create-namespace
+            --namespace {{ external_dns_namespace }}
+            -f {{ k8s_manifests_dir }}/external-dns-apex.yaml
+            {{ external_dns_chart_version | helm_chart_version_args }}
+
+        - name: Wait for external-dns DNSEndpoint CRD
+          ansible.builtin.command: >-
+            kubectl wait --for=condition=established --timeout=180s
+            crd/dnsendpoints.externaldns.k8s.io
+          register: wait_edns_crd
+          until: wait_edns_crd.rc == 0
+          retries: 20
+          delay: 6
+          changed_when: false
+
+        - name: Render external-dns ServiceMonitor
+          ansible.builtin.template:
+            src: external-dns-servicemonitor.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/external-dns-servicemonitor.yaml"
+            mode: '0644'
+
+        - name: Apply external-dns ServiceMonitor
+          ansible.builtin.command: >-
+            kubectl --validate=false apply -f {{ k8s_manifests_dir }}/external-dns-servicemonitor.yaml

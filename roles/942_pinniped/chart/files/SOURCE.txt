@@ -1,0 +1,11 @@
+Official install YAML vendored from:
+  https://get.pinniped.dev/v0.47.0/install-pinniped-supervisor.yaml
+  https://get.pinniped.dev/v0.47.0/install-pinniped-concierge.yaml
+CRDs live in chart/crds/; remaining resources in chart/files/upstream/.
+Helm .Files keys are chart-relative (files/ is not stripped):
+  .Files.Get "files/upstream/supervisor-resources.yaml"
+  .Files.Get "files/login/index.html"
+Bump: replace those files, set Chart.yaml appVersion, and pinniped_version in catalog.
+Atlas templates strip kind: Namespace and rewrite namespace: onto
+.Values.pinnipedNamespace; 01 also disables impersonation proxy (string replace).
+Vendor files stay stock.

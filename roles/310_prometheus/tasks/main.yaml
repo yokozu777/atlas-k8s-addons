@@ -1,0 +1,111 @@
+    - name: Remove prometheus Helm chart (absent)
+      when: prometheus_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: prometheus
+            namespace: "{{ monitoring_namespace }}"
+        helm_chart_absent_ingress_app_names:
+          - prometheus-kube-prometheus-prometheus
+          - grafana-ingress
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/prometheus.yaml"
+          - "{{ k8s_manifests_dir }}/calico-grafana-dashboards.yaml"
+          - "{{ k8s_manifests_dir }}/typha-dashboard.json"
+        helm_chart_absent_extra_resources:
+          - api_version: v1
+            kind: ConfigMap
+            name: grafana-dashboard-calico-typha
+            namespace: "{{ monitoring_namespace }}"
+    - name: Install/configure prometheus chart
+      when: prometheus_chart_state | default('present') == 'present'
+      block:
+    
+        - name: Render prometheus stack helm values
+          ansible.builtin.template:
+            src: prometheus.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/prometheus.yaml"
+            mode: '0644'
+    
+        - name: download certificate
+          ansible.builtin.shell: "{{ item }}"
+          with_items:
+            - >-
+              curl -k -o {{ k8s_ca_cert_path }}
+              {{ pki_ca_url if pki_ca_url is string else (pki_ca_url | first) }}
+    
+        - name: Fetch etcd client certificates from control-plane node via SSH
+          ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/fetch_control_plane_files.yaml"
+          vars:
+            k8s_control_plane_fetch_dest_dir: "{{ prometheus_etcd_client_cert_staging_dir }}"
+            k8s_control_plane_fetch_script: "{{ prometheus_etcd_client_cert_fetch_script }}"
+            k8s_control_plane_fetch_remote_files: "{{ prometheus_etcd_client_cert_remote_files }}"
+            k8s_control_plane_fetch_failure_context: prometheus etcd-client-cert secret (310_prometheus)
+            k8s_control_plane_fetch_missing_hint: >-
+              Run 21_kubeadm_init before 310_prometheus to provision etcd client PKI on the control-plane node.
+
+        - name: Ensure etcd-client-cert secret for prometheus
+          ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/ensure_kubectl_secret_from_dir.yaml"
+          vars:
+            k8s_kubectl_secret_name: "{{ prometheus_etcd_client_cert_secret_name }}"
+            k8s_kubectl_secret_namespace: "{{ monitoring_namespace }}"
+            k8s_kubectl_secret_from_dir: "{{ prometheus_etcd_client_cert_staging_dir }}"
+            k8s_kubectl_secret_failure_context: prometheus etcd-client-cert secret (310_prometheus)
+    
+        - name: Helming prometheus
+          ansible.builtin.command: >-
+            helm upgrade --install {{ item }}
+            --create-namespace
+            {{ prometheus_chart_version | helm_chart_version_args }}
+          loop:
+            - prometheus prometheus-community/kube-prometheus-stack --namespace {{ monitoring_namespace }} -f {{ k8s_manifests_dir }}/prometheus.yaml
+
+        - name: Remove Typha Grafana dashboard ConfigMap (calico absent)
+          when: calico_chart_state | default('present') == 'absent'
+          ansible.builtin.command: >-
+            kubectl delete configmap grafana-dashboard-calico-typha
+            -n {{ monitoring_namespace }} --ignore-not-found
+          changed_when: false
+
+        - name: Provision official Calico Typha Grafana dashboard
+          when: calico_chart_state | default('present') == 'present'
+          block:
+            - name: Download official Calico Grafana dashboards ConfigMap
+              ansible.builtin.get_url:
+                url: "{{ calico_grafana_dashboards_manifest_url }}"
+                dest: "{{ k8s_manifests_dir }}/calico-grafana-dashboards.yaml"
+                mode: "0644"
+                force: true
+                timeout: 60
+
+            - name: Extract Typha Grafana dashboard JSON
+              ansible.builtin.command:
+                argv:
+                  - "{{ ansible_python_interpreter | default('python3') }}"
+                  - "{{ role_path }}/files/extract_calico_typha_dashboard.py"
+                  - "{{ k8s_manifests_dir }}/calico-grafana-dashboards.yaml"
+                  - "{{ k8s_manifests_dir }}/typha-dashboard.json"
+
+            - name: Apply Typha Grafana dashboard ConfigMap
+              ansible.builtin.shell: |
+                set -euo pipefail
+                kubectl create configmap grafana-dashboard-calico-typha \
+                  --namespace {{ monitoring_namespace | quote }} \
+                  --from-file=typha-dashboard.json={{ k8s_manifests_dir }}/typha-dashboard.json \
+                  --dry-run=client -o yaml \
+                | kubectl apply -f -
+                kubectl label configmap grafana-dashboard-calico-typha \
+                  --namespace {{ monitoring_namespace | quote }} \
+                  grafana_dashboard=1 --overwrite
+                kubectl annotate configmap grafana-dashboard-calico-typha \
+                  --namespace {{ monitoring_namespace | quote }} \
+                  grafana_folder='Cluster addons' --overwrite
+              args:
+                executable: /bin/bash
+              changed_when: true
+
+        - name: Restart prometheus-operator to reconcile ServiceMonitors
+          ansible.builtin.command: >-
+            kubectl rollout restart deployment/prometheus-kube-prometheus-operator
+            -n {{ monitoring_namespace }}
+          changed_when: true

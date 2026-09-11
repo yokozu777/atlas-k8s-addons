@@ -1,0 +1,82 @@
+    - name: Remove vault Helm chart (absent)
+      when: vault_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: vault
+            namespace: "{{ vault_namespace }}"
+        helm_chart_absent_ingress_app_names:
+          - vault
+        helm_chart_absent_cluster_resources:
+          - api_version: admissionregistration.k8s.io/v1
+            kind: MutatingWebhookConfiguration
+            name: vault-agent-injector-cfg
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/vault.yaml"
+          - "{{ k8s_manifests_dir }}/vault.sh"
+          - "{{ k8s_manifests_dir }}/vault-bootstrap.sh"
+          - "{{ k8s_manifests_dir }}/vault-oidc-ca.pem"
+    - name: Install/configure vault chart
+      when: vault_chart_state | default('present') == 'present'
+      block:
+        - name: Render vault helm values
+          ansible.builtin.template:
+            src: vault.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/vault.yaml"
+            mode: '0644'
+
+        - name: Template vault init script
+          ansible.builtin.template:
+            src: vault.sh.j2
+            dest: "{{ k8s_manifests_dir }}/vault.sh"
+            mode: '0755'
+
+        - name: Template vault bootstrap script
+          ansible.builtin.template:
+            src: vault-bootstrap.sh.j2
+            dest: "{{ k8s_manifests_dir }}/vault-bootstrap.sh"
+            mode: '0755'
+
+        - name: Wait for Consul server before Vault
+          ansible.builtin.shell: >
+            kubectl rollout status statefulset/consul-server
+            --namespace {{ vault_namespace }}
+            --timeout=300s
+          register: wait_consul_for_vault
+          until: wait_consul_for_vault.rc == 0
+          retries: 30
+          delay: 10
+          changed_when: false
+
+        # Helm 4 SSA vs field manager vault-k8s on MWC vault-agent-injector-cfg
+        # caBundle. --take-ownership steals the Helm release manager only;
+        # --force-conflicts is required on every upgrade. Do not delete the webhook.
+        - name: Helming vault
+          ansible.builtin.command: >-
+            helm upgrade --install {{ item }}
+            --create-namespace
+            --take-ownership
+            --force-conflicts
+            {{ vault_chart_version | helm_chart_version_args }}
+          loop:
+            - vault hashicorp/vault --namespace {{ vault_namespace }} -f {{ k8s_manifests_dir }}/vault.yaml
+
+        - name: Wait until vault API is responding
+          ansible.builtin.shell: |
+            set -o pipefail
+            kubectl exec -n {{ vault_namespace }} vault-0 -- vault status -format=json
+            rc=$?
+            # vault status: 0=unsealed, 1=error, 2=sealed (API up, init/unseal pending)
+            if [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ]; then
+              exit 0
+            fi
+            exit "$rc"
+          args:
+            executable: /bin/bash
+          environment:
+            KUBECONFIG: "{{ k8s_kubeconfig }}"
+          register: vault_status_check
+          until: vault_status_check.rc == 0
+          retries: 120
+          delay: 5
+          changed_when: false

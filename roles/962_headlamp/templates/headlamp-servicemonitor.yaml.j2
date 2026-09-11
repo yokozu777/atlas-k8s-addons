@@ -1,0 +1,16 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: headlamp
+  namespace: {{ headlamp_namespace }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ headlamp_namespace }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: headlamp
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s

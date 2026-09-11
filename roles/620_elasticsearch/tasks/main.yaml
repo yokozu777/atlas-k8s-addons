@@ -1,0 +1,98 @@
+    - name: Remove elasticsearch Helm chart (absent)
+      when: elasticsearch_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: elasticsearch
+            namespace: "{{ logging_namespace }}"
+          - name: elasticsearch-exporter
+            namespace: "{{ logging_namespace }}"
+        helm_chart_absent_ingress_app_names:
+          - elasticsearch-master
+        helm_chart_absent_extra_resources:
+          - api_version: objectbucket.io/v1alpha1
+            kind: ObjectBucketClaim
+            name: "{{ elasticsearch_snapshot_obc_name }}"
+            namespace: "{{ logging_namespace }}"
+          - api_version: v1
+            kind: Secret
+            name: "{{ elasticsearch_s3_credentials_secret }}"
+            namespace: "{{ logging_namespace }}"
+          - api_version: monitoring.coreos.com/v1
+            kind: ServiceMonitor
+            name: elasticsearch-exporter
+            namespace: "{{ logging_namespace }}"
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/elastic.yaml"
+          - "{{ k8s_manifests_dir }}/elasticsearch-exporter.yaml"
+          - "{{ k8s_manifests_dir }}/elasticsearch-exporter-servicemonitor.yaml"
+    - name: Install/configure elasticsearch chart
+      when: elasticsearch_chart_state | default('present') == 'present'
+      block:
+        - name: Prepare Elasticsearch snapshot backend
+          ansible.builtin.include_tasks: snapshot_backend.yml
+
+        - name: Render elasticsearch helm values
+          ansible.builtin.template:
+            src: elastic.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/elastic.yaml"
+            mode: '0644'
+    
+        - name: Helming
+          command: >-
+            helm upgrade --install {{ item }}
+            --create-namespace
+            {{ elasticsearch_chart_version | helm_chart_version_args }}
+          loop:
+            - elasticsearch elastic/elasticsearch --namespace {{ logging_namespace }} -f {{ k8s_manifests_dir }}/elastic.yaml
+    
+        - name: Wait until Elasticsearch reserved user can authenticate
+          ansible.builtin.include_tasks: wait_ready.yml
+
+        - name: Ensure elastic logger user
+          ansible.builtin.include_tasks: elasticsearch_security_user.yml
+          vars:
+            elasticsearch_user_title: POST _security/user/{{ k8s_users.elastic_logger }}
+            elasticsearch_user_name: "{{ k8s_users.elastic_logger }}"
+            elasticsearch_user_password: "{{ k8s_secrets.elastic_logger_password }}"
+
+        - name: Ensure elastic admin user
+          ansible.builtin.include_tasks: elasticsearch_security_user.yml
+          vars:
+            elasticsearch_user_title: POST _security/user/{{ k8s_users.elastic_admin }}
+            elasticsearch_user_name: "{{ k8s_users.elastic_admin }}"
+            elasticsearch_user_password: "{{ k8s_secrets.elastic_admin_password }}"
+
+        - name: Ensure elastic jaeger user
+          ansible.builtin.include_tasks: elasticsearch_security_user.yml
+          vars:
+            elasticsearch_user_title: POST _security/user/{{ k8s_users.elastic_jaeger }}
+            elasticsearch_user_name: "{{ k8s_users.elastic_jaeger }}"
+            elasticsearch_user_password: "{{ k8s_secrets.elastic_jaeger_password }}"
+
+        - name: Configure Elasticsearch ILM and log index templates
+          ansible.builtin.include_tasks: logging_ilm.yml
+
+        - name: Configure Elasticsearch snapshot repository and SLM
+          ansible.builtin.include_tasks: logging_slm.yml
+          when: elasticsearch_s3_ready | default(false) | bool
+
+        - name: Render elasticsearch-exporter helm values
+          ansible.builtin.template:
+            src: elasticsearch-exporter.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/elasticsearch-exporter.yaml"
+            mode: '0644'
+
+        - name: Helming elasticsearch-exporter
+          ansible.builtin.command: >-
+            helm upgrade --install elasticsearch-exporter
+            prometheus-community/prometheus-elasticsearch-exporter
+            --namespace {{ logging_namespace }}
+            -f {{ k8s_manifests_dir }}/elasticsearch-exporter.yaml
+            {{ elasticsearch_exporter_chart_version | default('') | helm_chart_version_args }}
+
+        - name: Remove leftover custom elasticsearch-exporter ServiceMonitor
+          ansible.builtin.command: >-
+            kubectl delete servicemonitor elasticsearch-exporter
+            -n {{ logging_namespace }} --ignore-not-found
+          changed_when: false

@@ -1,0 +1,335 @@
+###########################################################################################################################################
+### ELASTIC USER PASSWORD
+###########################################################################################################################################
+
+    - name: elastic-credentials secret
+      kubernetes.core.k8s:
+        state: present
+        definition: 
+          apiVersion: v1
+          kind: Secret            
+          metadata:
+            name: elastic-credentials
+            namespace: "{{ logging_namespace }}"
+          type: Opaque
+          data:
+            password: "{{ k8s_secrets.elastic_password | b64encode }}"
+            username: "{{ k8s_users.elastic_superuser | b64encode }}"
+
+###########################################################################################################################################
+### ELASTIC TRUSTORE&KEYSTORE PASSWORDS
+###########################################################################################################################################
+
+    - name: elastic-certificates-password
+      kubernetes.core.k8s:
+        state: present
+        definition: 
+          apiVersion: v1
+          kind: Secret           
+          metadata:
+            name: elastic-certificates-password
+            namespace: "{{ logging_namespace }}"
+          type: Opaque            
+          data:
+            xpack.security.http.ssl.keystore.secure_password: "{{ k8s_secrets.elastic_cert_password | b64encode }}"
+            xpack.security.http.ssl.truststore.secure_password: "{{ k8s_secrets.elastic_cert_password | b64encode }}"
+            xpack.security.transport.ssl.keystore.secure_password: "{{ k8s_secrets.elastic_cert_password | b64encode }}"
+            xpack.security.transport.ssl.truststore.secure_password: "{{ k8s_secrets.elastic_cert_password | b64encode }}"
+
+###########################################################################################################################################
+### WAIT TRUSTMANAGER
+###########################################################################################################################################
+
+    - name: Wait until trust-manager pod is ready
+      shell: >
+        kubectl get pod -n {{ cert_manager_namespace }} -l app=trust-manager
+        -o jsonpath='{.items[0].status.containerStatuses[0].ready}'
+      register: trust_ready
+      until: trust_ready.stdout == "true"
+      retries: 300
+      delay: 3
+
+###########################################################################################################################################
+### ENABLE TRUSTBUNDLE
+###########################################################################################################################################
+
+    - name: Add trustbundle label to {{ logging_namespace }} namespace
+      ansible.builtin.command: >
+        kubectl label namespace {{ logging_namespace }} trustbundle=enabled --overwrite
+
+###########################################################################################################################################
+### CREATE TRUSTBUNDLE
+###########################################################################################################################################
+
+    - name: Create elasticsearch-trust Bundle
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: trust.cert-manager.io/v1alpha1
+          kind: Bundle
+          metadata:
+            name: elasticsearch-trust
+          spec:
+            sources:
+              - configMap:
+                  name: public-bundle
+                  key: ca-certificates.crt
+            target:
+              configMap:
+                key: root-certs.pem
+              additionalFormats:
+                pkcs12:
+                  key: elastic_ca.p12
+              namespaceSelector:
+                matchLabels:
+                  trustbundle: "enabled"
+
+###########################################################################################################################################
+### WAIT PASSWORD SECRET
+###########################################################################################################################################
+
+    - name: Wait for elastic-certificates-password Secret to be present
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: elastic-certificates-password
+        namespace: "{{ logging_namespace }}"
+      register: secret_info
+      until: secret_info.resources | length > 0
+      retries: 300
+      delay: 3
+
+###########################################################################################################################################
+### ELASTIC GET CERT FROM CERTMANAGER
+###########################################################################################################################################
+
+    - name: Create elasticsearch-cert Certificate
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: cert-manager.io/v1
+          kind: Certificate
+          metadata:
+            name: elasticsearch-cert
+            namespace: "{{ logging_namespace }}"
+          spec:
+            secretName: elastic-keystore
+            dnsNames:
+              - "{{ elasticsearch_host }}"
+              - "{{ kibana_host }}"              
+              # - elasticsearch-master
+              # - elasticsearch-master.{{ logging_namespace }}
+              # - elasticsearch-master.{{ logging_namespace }}.svc
+              # - elasticsearch-master.{{ logging_namespace }}.svc.{{ k8s_dns_domain }}
+            issuerRef:
+              name: "{{ k8s_cluster_domain }}"
+              kind: ClusterIssuer
+              group: cert-manager.io
+            keystores:
+              pkcs12:
+                create: true
+                passwordSecretRef:
+                  name: elastic-certificates-password
+                  key: xpack.security.http.ssl.keystore.secure_password
+
+###########################################################################################################################################
+### WAIT ES KEYSTORE
+###########################################################################################################################################
+
+    - name: Wait for Certificate elasticsearch-cert to be Ready
+      shell: >
+        kubectl get certificate elasticsearch-cert -n {{ logging_namespace }}
+        -o jsonpath="{.status.conditions[?(@.type=='Ready')].status}"
+      register: cert_status
+      until: cert_status.stdout == "True"
+      retries: 300
+      delay: 3
+
+###########################################################################################################################################
+### ELASTIC MERGE SECRET
+###########################################################################################################################################
+
+    - name: Create elastic-certificates secret in one command via bash
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl create secret generic elastic-certificates -n {{ logging_namespace }} \
+          --type=Opaque \
+          --from-literal=ca.crt="$(kubectl get configmap elasticsearch-trust -n {{ logging_namespace }} -o jsonpath='{.data.root-certs\.pem}')" \
+          --from-file=elastic.p12=<(kubectl get secret elastic-keystore -n {{ logging_namespace }} -o jsonpath='{.data.keystore\.p12}' | base64 -d) \
+          --from-file=elastic_ca.p12=<(kubectl get configmap elasticsearch-trust -n {{ logging_namespace }} -o jsonpath='{.binaryData.elastic_ca\.p12}' | base64 -d) \
+          --from-file=tls.crt=<(kubectl get secret elastic-keystore -n {{ logging_namespace }} -o jsonpath='{.data.tls\.crt}' | base64 -d) \
+          --from-file=tls.key=<(kubectl get secret elastic-keystore -n {{ logging_namespace }} -o jsonpath='{.data.tls\.key}' | base64 -d) \
+          --dry-run=client -o yaml | kubectl apply -f -
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      register: elastic_certificates_secret
+      changed_when: "'unchanged' not in elastic_certificates_secret.stdout"
+
+# ###########################################################################################################################################
+# ### ELASTIC MANUAL CERT
+# ###########################################################################################################################################
+
+# ###########################################################################################################################################
+# ### ELASTIC CREATE CA PRIVATE KEY
+# ###########################################################################################################################################
+
+#     - name: Generate a self-signed private key for CA elasticsearch
+#       community.crypto.openssl_privatekey:
+#         return_content: true      
+#         path: "{{ k8s_manifests_dir }}/cluster_ca.key"
+#         # size: 4096
+#         # mode: 0755
+#         # type: RSA
+#         state: present
+#       no_log: True        
+#       register: private_key_ca
+
+# ###########################################################################################################################################
+# ### ELASTIC CREATE CA CSR
+# ###########################################################################################################################################
+
+#     - name: Create CSR for self-signed certificate CA elasticsearch
+#       community.crypto.openssl_csr_pipe:
+#         privatekey_path: "{{ k8s_manifests_dir }}/cluster_ca.key"
+#         common_name: elasticsearch.example.com
+#         use_common_name_for_san: false  # since we do not specify SANs, don't use CN as a SAN
+#         basic_constraints:
+#           - 'CA:TRUE'
+#         basic_constraints_critical: true
+#         key_usage:
+#           - keyCertSign
+#         key_usage_critical: true		
+#       register: csr_ca
+#       no_log: True
+
+# ###########################################################################################################################################
+# ### ELASTIC CREATE CA PUB
+# ###########################################################################################################################################
+
+#     - name: Generate a self-signed certificate CA elasticsearch
+#       community.crypto.x509_certificate:
+#         return_content: true      
+#         path: "{{ k8s_manifests_dir }}/cluster_ca.crt"
+#         privatekey_path: "{{ k8s_manifests_dir }}/cluster_ca.key"
+#         csr_content: "{{ csr_ca.csr }}"
+#         provider: selfsigned
+#         selfsigned_not_after: "+3650d"
+#         # mode: 0777    
+#       register: public_key_ca 
+
+# ###########################################################################################################################################
+# ### ELASTIC CREATE PRIVATE KEY
+# ###########################################################################################################################################
+
+#     - name: Generate a self-signed private key for elasticsearch
+#       community.crypto.openssl_privatekey:
+#         return_content: true      
+#         path: "{{ k8s_manifests_dir }}/elasticsearch.key"
+#         state: present
+#       no_log: True        
+#       register: private_key_es
+
+# ###########################################################################################################################################
+# ### ELASTIC CREATE CSR
+# ###########################################################################################################################################
+
+#     - name: Create CSR for self-signed certificate elasticsearch
+#       community.crypto.openssl_csr_pipe:
+#         privatekey_path: "{{ k8s_manifests_dir }}/elasticsearch.key"
+#         common_name: elasticsearch-master
+#         # organization_name: contoso, Inc.
+#         subject_alt_name:
+#           - "DNS:elasticsearch-master"
+#       register: csr_es
+#       no_log: True      
+
+# ###########################################################################################################################################
+# ### ELASTIC CREATE PUB 
+# ###########################################################################################################################################
+
+#     - name: Sign certificate with our CA
+#       community.crypto.x509_certificate_pipe:
+#         csr_content: "{{ csr_es.csr }}"
+#         provider: ownca
+#         ownca_path: "{{ k8s_manifests_dir }}/cluster_ca.crt"
+#         ownca_privatekey_path: "{{ k8s_manifests_dir }}/cluster_ca.key"
+#         #ownca_privatekey_passphrase: "{{ secret_ca_passphrase }}"
+#         ownca_not_after: +365d  # valid for one year
+#         ownca_not_before: "-1d"  # valid since yesterday
+#       run_once: true
+#       register: public_key_es
+
+# ###########################################################################################################################################
+# ### ELASTIC STORE CERT
+# ###########################################################################################################################################
+
+#     - name: store es cert
+#       ansible.builtin.copy:
+#         dest: "{{ k8s_manifests_dir }}/elasticsearch.crt"
+#         content: "{{ public_key_es.certificate }}"
+        
+# ###########################################################################################################################################
+# ### ELASTIC CREATE KEYSTORE
+# ###########################################################################################################################################
+
+#     - name: Generate PKCS#12 file
+#       community.crypto.openssl_pkcs12:
+#         return_content: true
+#         passphrase: "random"
+#         action: export
+#         path: "{{ k8s_manifests_dir }}/elastic.p12"
+#         friendly_name: elastic
+#         privatekey_path: "{{ k8s_manifests_dir }}/elasticsearch.key"
+#         certificate_path: "{{ k8s_manifests_dir }}/elasticsearch.crt"
+#         other_certificates: {{ k8s_manifests_dir }}/cluster_ca.crt
+#         # Note that if /opt/certs/ca.pem contains multiple certificates,
+#         # only the first one will be used. See the other_certificates_parse_all
+#         # option for changing this behavior.
+#         state: present
+#       register: elastic_p12
+
+# ###########################################################################################################################################
+# ### ELASTIC CREATE TRUSTORE
+# ###########################################################################################################################################
+
+#     - name: "Create my own truststore"
+#       java_cert:
+#         keystore_path: "{{ k8s_manifests_dir }}/elastic_ca.p12"
+#         keystore_pass: "random"
+#         keystore_create: "yes"
+#         state: "present"
+#         cert_alias: elastic ca
+#         cert_path: "{{ k8s_manifests_dir }}/cluster_ca.crt"
+#       #register: elastic_ca_p12        
+
+#     - name: elastic_ca_p12 register
+#       slurp:
+#         src: "{{ k8s_manifests_dir }}/elastic_ca.p12"
+#       register: elastic_ca_p12
+
+# ###########################################################################################################################################
+# ### ELASTIC CREATE TRUSTORE&KEYSTORE
+# ###########################################################################################################################################
+
+#     - name: elastic secret
+#       k8s:
+#         kubeconfig: {{ k8s_manifests_dir }}/.kube/config       
+#         state: present
+#         namespace: {{ logging_namespace }}
+#         definition:
+#           apiVersion: v1
+#           kind: Secret
+#           metadata:
+#             name: elastic-certificates
+#           type: Opaque                    
+#           data:
+#             elastic.p12:  "{{ elastic_p12.pkcs12 }}"
+#             elastic_ca.p12:  "{{ elastic_ca_p12.content }}"
+#             ca.crt:  "{{ public_key_ca.certificate | b64encode }}" 
+#             tls.crt:  "{{ public_key_es.certificate | b64encode }}" 
+#             tls.key:  "{{ private_key_es.privatekey | b64encode }}"
+# ###########################################################################################################################################
+# ### ELASTIC MANUAL CERT END
+# ###########################################################################################################################################

@@ -1,0 +1,21 @@
+---
+- name: Ensure controller reports directory exists
+  ansible.builtin.file:
+    path: "{{ controller_reports_dir }}"
+    state: directory
+    mode: '0700'
+
+- name: Build cluster credentials report
+  ansible.builtin.import_tasks: build_report.yaml
+
+- name: Collect runtime secrets from cluster
+  ansible.builtin.import_tasks: collect_runtime.yaml
+
+- name: Validate cluster credentials report
+  ansible.builtin.import_tasks: validate_report.yaml
+
+- name: Render cluster credentials exports
+  ansible.builtin.import_tasks: render_yaml.yaml
+
+- name: Render cluster credentials markdown
+  ansible.builtin.import_tasks: render_markdown.yaml

@@ -1,0 +1,17 @@
+---
+- name: Resolve snapshotter kustomize paths
+  ansible.builtin.set_fact:
+    snapshotter_crd_kustomize_path: "{{ external_snapshotter_dir }}/client/config/crd"
+    snapshotter_controller_kustomize_path: "{{ external_snapshotter_dir }}/deploy/kubernetes/snapshot-controller"
+
+- name: Install external-snapshotter CRDs and controller
+  ansible.builtin.shell: |
+    set -o pipefail
+    kubectl kustomize "{{ snapshotter_crd_kustomize_path }}" | kubectl apply -f -
+    kubectl -n kube-system kustomize "{{ snapshotter_controller_kustomize_path }}" | kubectl apply -f -
+  args:
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: "{{ k8s_kubeconfig }}"
+  register: snapshotter_install
+  changed_when: "'unchanged' not in snapshotter_install.stdout"

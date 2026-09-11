@@ -1,0 +1,28 @@
+---
+# PUT Elasticsearch API. uri stays no_log (url_password in module args).
+# Follow-up fail prints HTTP status + ES JSON so ILM/SLM 400s are visible.
+- name: "{{ elasticsearch_put_title }}"
+  ansible.builtin.uri:
+    validate_certs: false
+    url: "{{ elasticsearch_put_url }}"
+    method: PUT
+    url_username: "{{ k8s_users.elastic_superuser }}"
+    url_password: "{{ k8s_secrets.elastic_password }}"
+    force_basic_auth: true
+    body_format: json
+    body: "{{ elasticsearch_put_body }}"
+    headers:
+      Content-Type: "application/json"
+  register: elasticsearch_put_result
+  no_log: true
+  failed_when: false
+  retries: "{{ elasticsearch_put_retries | default(0) }}"
+  delay: "{{ elasticsearch_put_delay | default(1) }}"
+  until: elasticsearch_put_result.status | default(0) in (elasticsearch_put_ok_statuses | default([200, 201]))
+
+- name: Fail if {{ elasticsearch_put_title }} was rejected
+  ansible.builtin.fail:
+    msg: >-
+      {{ elasticsearch_put_title }} HTTP {{ elasticsearch_put_result.status | default('n/a') }}:
+      {{ elasticsearch_put_result.json | default(elasticsearch_put_result.content) | default(elasticsearch_put_result.msg) | default('') }}
+  when: elasticsearch_put_result.status | default(0) not in (elasticsearch_put_ok_statuses | default([200, 201]))

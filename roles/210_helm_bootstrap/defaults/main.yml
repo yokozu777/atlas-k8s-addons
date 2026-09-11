@@ -1,0 +1,28 @@
+---
+controller_helm_cache_dir: "{{ controller_helm_config_dir }}/cache"
+helm_repo_update_retries: 1
+helm_repo_update_delay: 5
+helm_repo_http_timeout: 30s
+controller_ssl_cert_file: "{{ controller_ca_cert_dir }}/ca-bundle.crt"
+controller_tls_environment: "{{
+    {
+      'SSL_CERT_FILE': controller_ssl_cert_file,
+      'REQUESTS_CA_BUNDLE': controller_ssl_cert_file,
+      'GIT_SSL_CAINFO': controller_ssl_cert_file
+    } if (pki_ca_url | default('') | length > 0) else {}
+  }}"
+_helm_client_env: "{{
+    {
+      'HELM_CONFIG_HOME': controller_helm_config_dir,
+      'HELM_CACHE_HOME': controller_helm_cache_dir,
+      'HELM_REPOSITORY_CACHE': controller_helm_cache_dir ~ '/repository',
+      'HELM_REQUEST_TIMEOUT': helm_repo_http_timeout
+    } | combine(controller_tls_environment | default({}))
+  }}"
+_helm_kube_env: "{{
+    {
+      'KUBECONFIG': k8s_kubeconfig | default(controller_kubeconfig),
+      'HELM_CONFIG_HOME': controller_helm_config_dir,
+      'HELM_CACHE_HOME': controller_helm_cache_dir
+    } | combine(controller_tls_environment | default({}))
+  }}"

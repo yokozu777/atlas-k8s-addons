@@ -1,0 +1,7 @@
+---
+- name: Render cluster credentials markdown report
+  ansible.builtin.template:
+    src: cluster-credentials.md.j2
+    dest: "{{ cluster_credentials_md_file }}"
+    mode: '0600'
+  no_log: true

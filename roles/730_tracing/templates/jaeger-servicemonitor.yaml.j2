@@ -1,0 +1,18 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: jaeger
+  namespace: {{ tracing_namespace }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ tracing_namespace }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: jaeger
+      app.kubernetes.io/component: all-in-one
+  endpoints:
+    - port: internal-metrics
+      path: /metrics
+      interval: 30s

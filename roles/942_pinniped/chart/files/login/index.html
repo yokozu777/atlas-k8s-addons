@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pinniped kubeconfig — {{ .Values.loginUi.clusterDomain }}</title>
+  <style>
+    body { font-family: sans-serif; max-width: 52rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.45; }
+    code, pre { font-family: ui-monospace, monospace; }
+    pre { background: #f4f4f4; padding: 0.75rem 1rem; overflow-x: auto; }
+    a.button { display: inline-block; margin: 0.5rem 0 1.25rem; padding: 0.5rem 0.9rem; background: #1a1a1a; color: #fff; text-decoration: none; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { text-align: left; border-bottom: 1px solid #ddd; padding: 0.4rem 0.5rem; }
+  </style>
+</head>
+<body>
+  <h1>Pinniped kubeconfig</h1>
+  <p>
+    This cluster uses Pinniped (Supervisor + Concierge) with Keycloak as the identity provider.
+    Download the kubeconfig, install the matching CLI, then <code>kubectl</code> will open a browser login.
+  </p>
+  <p>
+    <a class="button" href="/kubeconfig.yaml">Download {{ .Values.loginUi.clusterDomain }}.yaml</a>
+  </p>
+  <h2>1. Install the Pinniped CLI ({{ .Values.pinnipedVersion }})</h2>
+  <p>
+    Put the binary on your <code>PATH</code> as <code>pinniped</code>.
+    The kubeconfig exec plugin calls <code>pinniped</code> by name (not a controller path).
+    Without that binary on PATH, <code>kubectl</code> cannot log in.
+  </p>
+  <table>
+    <thead><tr><th>OS / arch</th><th>Asset</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Linux amd64</td>
+        <td><a href="https://github.com/vmware/pinniped/releases/download/{{ .Values.pinnipedVersion }}/pinniped-cli-linux-amd64">pinniped-cli-linux-amd64</a></td>
+      </tr>
+      <tr>
+        <td>Linux arm64</td>
+        <td><a href="https://github.com/vmware/pinniped/releases/download/{{ .Values.pinnipedVersion }}/pinniped-cli-linux-arm64">pinniped-cli-linux-arm64</a></td>
+      </tr>
+      <tr>
+        <td>macOS amd64</td>
+        <td><a href="https://github.com/vmware/pinniped/releases/download/{{ .Values.pinnipedVersion }}/pinniped-cli-darwin-amd64">pinniped-cli-darwin-amd64</a></td>
+      </tr>
+      <tr>
+        <td>macOS arm64</td>
+        <td><a href="https://github.com/vmware/pinniped/releases/download/{{ .Values.pinnipedVersion }}/pinniped-cli-darwin-arm64">pinniped-cli-darwin-arm64</a></td>
+      </tr>
+      <tr>
+        <td>Windows amd64</td>
+        <td><a href="https://github.com/vmware/pinniped/releases/download/{{ .Values.pinnipedVersion }}/pinniped-cli-windows-amd64.exe">pinniped-cli-windows-amd64.exe</a></td>
+      </tr>
+    </tbody>
+  </table>
+  <p>Linux / macOS:</p>
+  <pre>chmod +x pinniped-cli-*
+sudo mv pinniped-cli-* /usr/local/bin/pinniped
+pinniped version</pre>
+  <h2>2. Use the kubeconfig</h2>
+  <pre>export KUBECONFIG=./{{ .Values.loginUi.clusterDomain }}.yaml
+kubectl get ns</pre>
+  <p>
+    A browser window opens against Keycloak. Sign in with a user in group
+    <code>k8s-admins</code> (maps to <code>cluster-admin</code>).
+    Concierge issues a short-lived client certificate.
+  </p>
+  <h2>Break-glass</h2>
+  <p>
+    Controller admin kubeconfig remains <code>admin.conf</code>.
+    Kubelogin OIDC remains <code>*.oidc</code> (client <code>kubernetes</code>).
+    Do not commit downloaded kubeconfig files.
+  </p>
+</body>
+</html>

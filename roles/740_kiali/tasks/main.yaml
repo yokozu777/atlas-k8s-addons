@@ -1,0 +1,65 @@
+    - name: Remove kiali Helm chart (absent)
+      when: kiali_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: kiali-operator
+            namespace: "{{ kiali_operator_namespace }}"
+        helm_chart_absent_delete_namespace: true
+        helm_chart_absent_namespaces:
+          - "{{ kiali_operator_namespace }}"
+        helm_chart_absent_extra_label_selectors:
+          - namespace: "{{ istio_namespace }}"
+            selector: app=kiali
+        helm_chart_absent_ingress_app_names:
+          - kiali
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/kiali.yaml"
+          - "{{ k8s_manifests_dir }}/kiali-servicemonitor.yaml"
+    - name: Install/configure kiali chart
+      when: kiali_chart_state | default('present') == 'present'
+      block:
+        - name: Render kiali helm values
+          ansible.builtin.template:
+            src: kiali.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/kiali.yaml"
+            mode: '0644'
+    
+        - name: Wait for Jaeger endpoint in {{ tracing_namespace }} namespace
+          ansible.builtin.shell: >
+            kubectl get endpoints jaeger -n {{ tracing_namespace }}
+            -o jsonpath='{.subsets[0].addresses[0].ip}'
+          register: jaeger_endpoint
+          until: jaeger_endpoint.rc == 0 and jaeger_endpoint.stdout != ""
+          retries: 60
+          delay: 5
+    
+        - name: Helming {{ kiali_operator_namespace }}
+          ansible.builtin.command: >-
+            helm upgrade --install {{ item }}
+            --create-namespace
+            {{ kiali_chart_version | helm_chart_version_args }}
+          loop:
+            - kiali-operator kiali/kiali-operator --namespace {{ kiali_operator_namespace }} -f {{ k8s_manifests_dir }}/kiali.yaml
+    
+        - name: Wait for Kiali deployment
+          ansible.builtin.shell: >
+            kubectl wait deployment kiali
+            --namespace {{ istio_namespace }}
+            --for=condition=Available
+            --timeout=300s
+          register: wait_kiali
+          until: wait_kiali.rc == 0
+          retries: 30
+          delay: 10
+
+        - name: Render kiali ServiceMonitor
+          ansible.builtin.template:
+            src: kiali-servicemonitor.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/kiali-servicemonitor.yaml"
+            mode: '0644'
+
+        - name: Apply kiali ServiceMonitor
+          ansible.builtin.command: >-
+            kubectl --validate=false apply
+            -f {{ k8s_manifests_dir }}/kiali-servicemonitor.yaml

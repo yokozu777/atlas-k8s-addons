@@ -1,0 +1,48 @@
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: {{ envoy_gateway_proxy_name }}
+  namespace: {{ envoy_gateway_namespace }}
+spec:
+  telemetry:
+    metrics:
+      prometheus: {}
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        type: LoadBalancer
+        loadBalancerIP: "{{ ingress_lb_ip }}"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: {{ envoy_gateway_gatewayclass_name }}
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: {{ envoy_gateway_proxy_name }}
+    namespace: {{ envoy_gateway_namespace }}
+---
+# HTTP :80 only. 560_apply_ingress replaces this Gateway with HTTPS + TLS passthrough listeners.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ envoy_gateway_gateway_name }}
+  namespace: {{ envoy_gateway_namespace }}
+spec:
+  gatewayClassName: {{ envoy_gateway_gatewayclass_name }}
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: {{ envoy_gateway_proxy_name }}
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: All

@@ -1,0 +1,128 @@
+{% set gw_name = envoy_gateway_gateway_name %}
+{% set gw_ns = envoy_gateway_namespace %}
+{% set kc_oidc_http = "http://keycloak-http." ~ keycloak_namespace ~ ".svc." ~ k8s_dns_domain ~ "/auth/realms/" ~ keycloak_realm ~ "/protocol/openid-connect" %}
+{% set nsids = namespace(from=[], apps=[]) %}
+{% for ing in k8s_ingress_apps_oidc_active | default([]) %}
+{% set _ = nsids.apps.append(ing) %}
+{% if ing.namespace not in nsids.from %}
+{% set _ = nsids.from.append(ing.namespace) %}
+{% endif %}
+{% endfor %}
+{% if nsids.from | length > 0 %}
+---
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: envoy-gateway-oidc-keycloak
+  namespace: {{ keycloak_namespace }}
+spec:
+  from:
+{% for ns in nsids.from %}
+    - group: gateway.envoyproxy.io
+      kind: SecurityPolicy
+      namespace: {{ ns }}
+{% endfor %}
+  to:
+    - group: ""
+      kind: Service
+      name: keycloak-http
+{% endif %}
+{% for ing in nsids.apps %}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ ing.name }}-oidc
+  namespace: {{ ing.namespace }}
+type: Opaque
+stringData:
+  client-secret: "{{ k8s_secrets.envoy_gateway_oidc_client_secret }}"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ ing.name }}
+  namespace: {{ ing.namespace }}
+spec:
+  parentRefs:
+    - name: {{ gw_name }}
+      namespace: {{ gw_ns }}
+      sectionName: https-{{ ing.name | replace('_', '-') }}
+  hostnames:
+    - {{ ing.host }}
+  rules:
+    - backendRefs:
+        - name: {{ ing.service }}
+          port: {{ ing.port }}
+{% if ing.backend_tls | default(false) | bool %}
+---
+apiVersion: gateway.networking.k8s.io/v1alpha3
+kind: BackendTLSPolicy
+metadata:
+  name: {{ ing.name }}-backend-tls
+  namespace: {{ ing.namespace }}
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: {{ ing.service }}
+      sectionName: {{ ing.backend_tls_section | default('https') }}
+  validation:
+    hostname: {{ ing.backend_tls_hostname | default(ing.host) }}
+    caCertificateRefs:
+      - name: {{ ing.backend_ca_secret }}
+        group: ""
+        kind: Secret
+{% endif %}
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: {{ ing.name }}-oidc
+  namespace: {{ ing.namespace }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: {{ ing.name }}
+  oidc:
+    provider:
+      issuer: "{{ oidc_issuer_url }}"
+      authorizationEndpoint: "{{ oidc_issuer_url }}/protocol/openid-connect/auth"
+      tokenEndpoint: "{{ kc_oidc_http }}/token"
+      endSessionEndpoint: "{{ oidc_issuer_url }}/protocol/openid-connect/logout"
+      backendRefs:
+        - name: keycloak-http
+          namespace: {{ keycloak_namespace }}
+          port: 80
+    clientID: envoy-gateway
+    clientSecret:
+      name: {{ ing.name }}-oidc
+    redirectURL: "https://{{ ing.host }}/oauth2/callback"
+    logoutPath: /logout
+    scopes:
+      - openid
+      - email
+      - profile
+    cookieNames:
+      idToken: IdToken
+    disableTokenEncryption: true
+  jwt:
+    providers:
+      - name: keycloak
+        issuer: "{{ oidc_issuer_url }}"
+        remoteJWKS:
+          uri: "{{ kc_oidc_http }}/certs"
+          backendRefs:
+            - name: keycloak-http
+              namespace: {{ keycloak_namespace }}
+              port: 80
+        extractFrom:
+          cookies:
+            - IdToken
+        claimToHeaders:
+          - claim: email
+            header: X-Auth-Request-Email
+          - claim: preferred_username
+            header: X-Auth-Request-User
+{% endfor %}

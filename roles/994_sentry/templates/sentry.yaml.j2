@@ -1,0 +1,234 @@
+mail:
+  backend: {{ sentry_mail.backend }}
+  useTls: {{ 'true' if sentry_mail.use_tls else 'false' }}
+  username: "{{ sentry_mail.username }}"
+  password: "{{ k8s_secrets.sentry_smtp_password }}"
+  port: {{ sentry_mail.port }}
+  host: "{{ sentry_mail.host }}"
+  from: "{{ sentry_mail.from }}"
+
+user:
+  create: true
+  email: {{ sentry_admin_email }}
+  password: "{{ k8s_secrets.sentry_admin_password }}"
+hooks:
+  enabled: true
+  removeOnSuccess: true
+  activeDeadlineSeconds: 2500
+  shareProcessNamespace: false
+  dbCheck:
+    resources:
+      limits:
+        memory: 0
+      requests:
+        cpu: 0
+        memory: 0
+  dbInit:
+    resources:
+      limits:
+        memory: 0
+      requests:
+        cpu: 0
+        memory: 0
+  snubaInit:
+    resources:
+      limits:
+        cpu: 0
+        memory: 0
+      requests:
+        cpu: 0
+        memory: 0
+rabbitmq:
+  ulimitNofiles: ""
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+# vroom:
+#   resources:
+#    limits:
+#      cpu: 200m
+#      memory: 400Mi
+#    requests:
+#      cpu: 10m
+#      memory: 32Mi
+#   replicas: 1
+#   autoscaling:
+#     enabled: true
+#     minReplicas: 2
+#     maxReplicas: 5
+#     targetCPUUtilizationPercentage: 50
+relay:
+  resources:
+   limits:
+     cpu: 100m
+     memory: 200Mi
+   requests:
+     cpu: 10m
+     memory: 32Mi
+  replicas: 1
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 50
+#{{ sentry_namespace }}:
+  # web:
+  #   autoscaling:
+  #     enabled: true
+  #     minReplicas: 2
+  #     maxReplicas: 5
+  # worker:
+  #   resources:
+  #    limits:
+  #      cpu: 500m
+  #      memory: 3000Mi
+  #    requests:
+  #      cpu: 10m
+  #      memory: 32Mi
+  #   replicas: 3
+  #   autoscaling:
+  #     enabled: true
+  #     minReplicas: 2
+  #     maxReplicas: 5
+  #     targetCPUUtilizationPercentage: 50
+  # ingestConsumer:
+  #   replicas: 1
+  #   # concurrency: 4
+  #   env: []
+  #   resources:
+  #    limits:
+  #      cpu: 100m
+  #      memory: 600Mi
+  #    requests:
+  #      cpu: 10m
+  #      memory: 32Mi
+  #   affinity: {}
+  #   nodeSelector: {}
+  #   securityContext: {}
+  #   containerSecurityContext: {}
+    # tolerations: []
+    # podLabels: []
+    # maxBatchSize: ""
+
+    # it's better to use prometheus adapter and scale based on
+    # the size of the rabbitmq queue
+    # autoscaling:
+    #   enabled: true
+    #   minReplicas: 1
+    #   maxReplicas: 3
+    #   targetCPUUtilizationPercentage: 50
+  # ingestConsumer:
+  #   resources:
+  #    limits:
+  #      cpu: 100m
+  #      memory: 600Mi
+  #    requests:
+  #      cpu: 10m
+  #      memory: 32Mi
+  #   replicas: 1
+  #   autoscaling:
+  #     enabled: true
+  #     minReplicas: 1
+  #     maxReplicas: 3
+  #     targetCPUUtilizationPercentage: 50
+  # ingestMetricsConsumerPerf:
+  #   replicas: 1
+  #   autoscaling:
+  #     enabled: true
+  #     minReplicas: 1
+  #     maxReplicas: 3
+  #     targetCPUUtilizationPercentage: 50
+  # ingestMetricsConsumerRh:
+  #   replicas: 1
+  #   autoscaling:
+  #     enabled: true
+  #     minReplicas: 1
+  #     maxReplicas: 3
+  #     targetCPUUtilizationPercentage: 50
+  # ingestReplayRecordings:
+  #   replicas: 1
+  #   autoscaling:
+  #     enabled: true
+  #     minReplicas: 1
+  #     maxReplicas: 3
+  #     targetCPUUtilizationPercentage: 50
+  # ingestProfiles:
+  #   replicas: 1
+  #   autoscaling:
+  #     enabled: true
+  #     minReplicas: 1
+  #     maxReplicas: 3
+  #     targetCPUUtilizationPercentage: 50
+  # ingestOccurrences:
+  #   replicas: 1
+  #   autoscaling:
+  #     enabled: true
+  #     minReplicas: 1
+  #     maxReplicas: 3
+  #     targetCPUUtilizationPercentage: 50
+  # ingestMonitors:
+  #   replicas: 1
+  #   autoscaling:
+  #     enabled: true
+  #     minReplicas: 1
+  #     maxReplicas: 3
+  #     targetCPUUtilizationPercentage: 50
+  # billingMetricsConsumer:
+  #   replicas: 1
+  #   autoscaling:
+  #     enabled: true
+  #     minReplicas: 1
+  #     maxReplicas: 3
+  #     targetCPUUtilizationPercentage: 50
+  # genericMetricsConsumer:
+  #   replicas: 1
+  #   autoscaling:
+  #     enabled: true
+  #     minReplicas: 1
+  #     maxReplicas: 3
+  #     targetCPUUtilizationPercentage: 50
+  # metricsConsumer:
+  #   replicas: 1
+  #   autoscaling:
+  #     enabled: true
+  #     minReplicas: 1
+  #     maxReplicas: 3
+  #     targetCPUUtilizationPercentage: 50
+snuba:
+  # subscriptionConsumerTransactions:
+  #   resources:
+  #    limits:
+  #      cpu: 500m
+  #      memory: 600Mi
+  #    requests:
+  #      cpu: 10m
+  #      memory: 32Mi
+  #   replicas: 1
+  #   autoscaling:
+  #     enabled: true
+  #     minReplicas: 2
+  #     maxReplicas: 5
+  #     targetCPUUtilizationPercentage: 50
+  api:
+    resources:
+     limits:
+       cpu: 500m
+       memory: 1000Mi
+     requests:
+       cpu: 10m
+       memory: 32Mi
+    replicas: 1
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 5
+      targetCPUUtilizationPercentage: 90
+symbolicator:
+  enabled: true
+  # api:
+  #   autoscaling:
+  #     enabled: true
+  #     minReplicas: 2
+  #     maxReplicas: 5
+  #     targetCPUUtilizationPercentage: 50

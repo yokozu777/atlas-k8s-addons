@@ -1,0 +1,87 @@
+---
+- name: Ensure staging directory exists for etcdctl binary install
+  ansible.builtin.file:
+    path: "{{ install_etcdctl_staging_dir }}"
+    state: directory
+    mode: '0700'
+
+- name: Check installed etcdctl client version
+  ansible.builtin.command: "{{ install_etcdctl_dest }} version"
+  register: install_etcdctl_version_cmd
+  changed_when: false
+  failed_when: false
+
+- name: Resolve etcdctl download URL and controller path
+  ansible.builtin.set_fact:
+    install_etcdctl_archive: "etcd-{{ install_etcdctl_version }}-linux-amd64.tar.gz"
+    install_etcdctl_url: >-
+      {{
+        (
+          (debug_tooling_binary_infra_base | regex_replace('/+$', ''))
+          ~ '/etcd-io/etcd/releases/download/'
+          ~ install_etcdctl_version
+          ~ '/etcd-'
+          ~ install_etcdctl_version
+          ~ '-linux-amd64.tar.gz'
+        )
+        if (debug_tooling_binary_source | default('github')) == 'infra'
+        else (
+          'https://github.com/etcd-io/etcd/releases/download/'
+          ~ install_etcdctl_version
+          ~ '/etcd-'
+          ~ install_etcdctl_version
+          ~ '-linux-amd64.tar.gz'
+        )
+      }}
+    install_etcdctl_controller_path: "{{ controller_staging_dir }}/debug-tooling/etcd-{{ install_etcdctl_version }}-linux-amd64.tar.gz"
+
+- name: Ensure controller staging directory for debug tooling binaries
+  ansible.builtin.file:
+    path: "{{ controller_staging_dir }}/debug-tooling"
+    state: directory
+    mode: "0750"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Check etcdctl archive on controller
+  ansible.builtin.stat:
+    path: "{{ install_etcdctl_controller_path }}"
+  register: install_etcdctl_controller_stat
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Download etcdctl archive on controller
+  ansible.builtin.get_url:
+    url: "{{ install_etcdctl_url }}"
+    dest: "{{ install_etcdctl_controller_path }}"
+    mode: "0644"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  environment: "{{ controller_tls_environment | default({}) }}"
+  when: not install_etcdctl_controller_stat.stat.exists
+
+- name: Copy etcdctl archive from controller
+  ansible.builtin.copy:
+    src: "{{ install_etcdctl_controller_path }}"
+    dest: "{{ install_etcdctl_staging_dir }}/{{ install_etcdctl_archive }}"
+    mode: "0644"
+  when: >-
+    install_etcdctl_version_cmd.rc != 0
+    or (install_etcdctl_version | trim | regex_replace('^v', '')) not in (install_etcdctl_version_cmd.stdout | default(''))
+
+- name: Install etcdctl binary
+  ansible.builtin.shell: |
+    set -euo pipefail
+    archive="{{ install_etcdctl_staging_dir }}/{{ install_etcdctl_archive }}"
+    tmpdir="$(mktemp -d)"
+    trap 'rm -rf "$tmpdir"' EXIT
+    tar -xzf "$archive" -C "$tmpdir"
+    install -m 0755 "$tmpdir/etcd-{{ install_etcdctl_version }}-linux-amd64/etcdctl" "{{ install_etcdctl_dest }}"
+  args:
+    executable: /bin/bash
+  when: >-
+    install_etcdctl_version_cmd.rc != 0
+    or (install_etcdctl_version | trim | regex_replace('^v', '')) not in (install_etcdctl_version_cmd.stdout | default(''))

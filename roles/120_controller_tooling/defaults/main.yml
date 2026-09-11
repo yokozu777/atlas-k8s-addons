@@ -1,0 +1,14 @@
+---
+# Controller tooling / PKI trust (localhost).
+# Keep task files in sync with sibling atlas-k8s-core when changing behaviour.
+# OS package install is gated on OS virtualenv/venv capability, not workspace venv.
+k8s_ca_cert_filename: ca.crt
+controller_ca_cert_path: "{{ controller_ca_cert_dir }}/{{ k8s_ca_cert_filename }}"
+controller_ssl_cert_file: "{{ controller_ca_cert_dir }}/ca-bundle.crt"
+controller_tls_environment: "{{
+  {
+    'SSL_CERT_FILE': controller_ssl_cert_file,
+    'REQUESTS_CA_BUNDLE': controller_ssl_cert_file,
+    'GIT_SSL_CAINFO': controller_ssl_cert_file
+  } if (pki_ca_url | default('') | length > 0) else {}
+}}"

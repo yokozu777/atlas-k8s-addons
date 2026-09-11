@@ -1,0 +1,16 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: oauth2-proxy
+  namespace: {{ oauth2_proxy_namespace }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ oauth2_proxy_namespace }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: oauth2-proxy
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s

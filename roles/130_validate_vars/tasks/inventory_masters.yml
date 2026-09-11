@@ -1,0 +1,18 @@
+---
+- name: Assert control-plane inventory group is defined and not empty
+  ansible.builtin.assert:
+    that:
+      - groups[k8s_master_hosts] is defined
+      - groups[k8s_master_hosts] | length > 0
+    fail_msg: >-
+      Inventory group named by k8s_master_hosts={{ k8s_master_hosts }}
+      must contain at least one host
+
+- name: Assert worker inventory group is defined
+  ansible.builtin.assert:
+    that:
+      - k8s_worker_hosts in groups
+    fail_msg: >-
+      Inventory must define the group named by k8s_worker_hosts={{ k8s_worker_hosts }}
+      (may be empty for chart-only runs).
+      Got workers={{ groups[k8s_worker_hosts] | default([]) | length }}

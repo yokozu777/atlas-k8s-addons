@@ -1,0 +1,6 @@
+---
+- name: Install calicoctl binary on debug tooling host
+  ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/install_calicoctl_binary.yaml"
+  vars:
+    install_calicoctl_dest: "{{ debug_tooling_install_dir }}/calicoctl"
+    install_calicoctl_version: "{{ calico_chart_version }}"

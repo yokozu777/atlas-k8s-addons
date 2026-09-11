@@ -1,0 +1,65 @@
+    - name: kibana encryption secret
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: kibana
+            namespace: "{{ logging_namespace }}"
+          type: Opaque
+          data:
+            encryptionkey: "{{ k8s_secrets.kibana_encryption_key | b64encode }}"
+
+    - name: Render kibana helm values
+      ansible.builtin.template:
+        src: kibana.yaml.j2
+        dest: "{{ k8s_manifests_dir }}/kibana.yaml"
+        mode: '0644'
+
+    - name: Download Kibana Helm chart
+      ansible.builtin.command: >-
+        helm pull {{ kibana_helm_chart_ref }}
+        --destination {{ controller_staging_dir }}
+        {{ kibana_chart_version | helm_chart_version_args }}
+      register: kibana_chart_pull
+      changed_when: kibana_chart_pull.rc == 0
+
+    - name: Unpack the Kibana Helm chart
+      ansible.builtin.unarchive:
+        src: "{{ controller_staging_dir }}/{{ kibana_chart_artifact }}"
+        dest: "{{ controller_staging_dir }}/"
+        remote_src: true
+        extra_opts:
+          - --overwrite
+
+    - name: Stat Kibana chart pre-install job template
+      ansible.builtin.stat:
+        path: "{{ kibana_chart_pre_install_job_template }}"
+      register: kibana_chart_pre_install_job_stat
+
+    - name: Stat Kibana chart post-delete job template
+      ansible.builtin.stat:
+        path: "{{ kibana_chart_post_delete_job_template }}"
+      register: kibana_chart_post_delete_job_stat
+
+    - name: Fail when Kibana chart job templates are missing
+      ansible.builtin.fail:
+        msg: >-
+          Kibana chart templates are missing under {{ k8s_kibana_chart_dir }}.
+          Ensure helm pull and unarchive completed successfully before patching.
+      when: >-
+        not (kibana_chart_pre_install_job_stat.stat.exists | default(false) | bool)
+        or not (kibana_chart_post_delete_job_stat.stat.exists | default(false) | bool)
+
+    - name: Fix Kibana chart pre-install job node path
+      ansible.builtin.replace:
+        path: "{{ kibana_chart_pre_install_job_template }}"
+        regexp: "{{ kibana_chart_node_command_search | regex_escape }}"
+        replace: "{{ kibana_chart_node_command_replace }}"
+
+    - name: Fix Kibana chart post-delete job node path
+      ansible.builtin.replace:
+        path: "{{ kibana_chart_post_delete_job_template }}"
+        regexp: "{{ kibana_chart_node_command_search | regex_escape }}"
+        replace: "{{ kibana_chart_node_command_replace }}"

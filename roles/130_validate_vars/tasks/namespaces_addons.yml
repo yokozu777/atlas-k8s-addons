@@ -1,0 +1,34 @@
+---
+- name: Assert platform namespace variables are set
+  ansible.builtin.assert:
+    that:
+      - monitoring_namespace | default('') | length > 0
+      - logging_namespace | default('') | length > 0
+      - rook_operator_namespace | default('') | length > 0
+      - rook_cluster_namespace | default('') | length > 0
+      - metallb_namespace | default('') | length > 0
+      - envoy_gateway_namespace | default('') | length > 0
+      - external_dns_namespace | default('') | length > 0
+      - cert_manager_namespace | default('') | length > 0
+      - istio_namespace | default('') | length > 0
+      - tracing_namespace | default('') | length > 0
+      - kiali_operator_namespace | default('') | length > 0
+      - chaos_mesh_namespace | default('') | length > 0
+      - falco_namespace | default('') | length > 0
+      - kyverno_namespace | default('') | length > 0
+      - policy_reporter_namespace | default('') | length > 0
+      - argocd_namespace | default('') | length > 0
+      - argo_rollouts_namespace | default('') | length > 0
+      - headlamp_namespace | default('') | length > 0
+      - mailu_namespace | default('') | length > 0
+      - cnpg_operator_namespace | default('') | length > 0
+      - cnpg_cluster_namespace | default('') | length > 0
+      - keycloak_namespace | default('') | length > 0
+      - oauth2_proxy_namespace | default('') | length > 0
+      - pinniped_namespace | default('') | length > 0
+      - vault_namespace | default('') | length > 0
+      - sentry_namespace | default('') | length > 0
+      - graylog_namespace | default('') | length > 0
+      - trivy_namespace | default('') | length > 0
+      - opencost_namespace | default('') | length > 0
+    fail_msg: "All addons *_namespace variables must be set in group_vars/all/atlas-k8s-addons.yml"

@@ -1,0 +1,51 @@
+---
+- name: Initialize cluster credentials infra report
+  ansible.builtin.set_fact:
+    cluster_credentials_report_infra: []
+
+- name: Build cluster credentials infra groups
+  ansible.builtin.set_fact:
+    cluster_credentials_report_infra: >-
+      {{
+        cluster_credentials_report_infra
+        + (
+          [
+            {
+              'id': item.id,
+              'category': item.category,
+              'title': item.title,
+              'items': cluster_credentials_infra_group_items,
+            }
+          ]
+          if cluster_credentials_infra_group_items | length > 0
+          else []
+        )
+      }}
+  vars:
+    cluster_credentials_infra_group_enabled: >-
+      {{
+        (item.enabled_var is not defined or (lookup('vars', item.enabled_var) | default(false) | bool))
+        and (
+          item.enabled_when is not defined
+          or (item.enabled_when | bool)
+        )
+      }}
+    cluster_credentials_infra_group_items: >-
+      {%- set rows = [] -%}
+      {%- for row in item['items'] | default([]) -%}
+      {%- set value = (
+            row.value_template
+            if row.value_template is defined
+            else (lookup('vars', row.value_var) | default('', true) if row.value_var is defined else '')
+          ) -%}
+      {%- if value | length > 0 -%}
+      {%- set _ = rows.append({'label': row.label, 'value': value}) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ rows }}
+  loop: "{{ cluster_credentials_infra_catalog }}"
+  when:
+    - cluster_credentials_include_infra | bool
+    - cluster_credentials_infra_group_enabled | bool
+  loop_control:
+    label: "{{ item.id }}"

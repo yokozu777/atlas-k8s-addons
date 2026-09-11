@@ -1,0 +1,95 @@
+    - name: Remove metallb Helm chart (absent)
+      when: metallb_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: metallb
+            namespace: "{{ metallb_namespace }}"
+        helm_chart_absent_delete_namespace: true
+        helm_chart_absent_namespaces:
+          - "{{ metallb_namespace }}"
+        helm_chart_absent_cluster_resources:
+          - api_version: admissionregistration.k8s.io/v1
+            kind: ValidatingWebhookConfiguration
+            name: metallb-webhook-configuration
+          - api_version: admissionregistration.k8s.io/v1
+            kind: ValidatingWebhookConfiguration
+            name: frr-k8s-validating-webhook-configuration
+        helm_chart_absent_extra_manifests:
+          - "{{ k8s_manifests_dir }}/metallb.yml"
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/metallb.yml"
+          - "{{ k8s_manifests_dir }}/metallb_values.yaml"
+    - name: Install/configure metallb chart
+      when: metallb_chart_state | default('present') == 'present'
+      block:
+        - name: Render metallb IP pool manifest
+          ansible.builtin.template:
+            src: metallb.yml.j2
+            dest: "{{ k8s_manifests_dir }}/metallb.yml"
+            mode: '0644'
+
+        - name: Render metallb helm values
+          ansible.builtin.template:
+            src: metallb_values.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/metallb_values.yaml"
+            mode: '0644'
+
+        - name: Install metallb Helm chart with values
+          ansible.builtin.command: >-
+            helm upgrade --install metallb metallb/metallb
+            --namespace {{ metallb_namespace }}
+            --create-namespace
+            -f {{ k8s_manifests_dir }}/metallb_values.yaml
+            {{ metallb_chart_version | helm_chart_version_args }}
+          register: metallb_helm_install
+          changed_when: "'has been upgraded' in metallb_helm_install.stdout or 'has been installed' in metallb_helm_install.stdout"
+
+        - name: Wait for metallb controller deployment rollout
+          ansible.builtin.command: >-
+            kubectl rollout status deployment/metallb-controller
+            -n {{ metallb_namespace }} --timeout=300s
+          register: wait_metallb_controller
+          until: wait_metallb_controller.rc == 0
+          retries: 5
+          delay: 10
+          changed_when: false
+
+        - name: Wait for metallb webhook endpoints
+          ansible.builtin.command: >-
+            kubectl get endpoints metallb-webhook-service
+            -n {{ metallb_namespace }}
+            -o jsonpath={.subsets[0].addresses[0].ip}
+          register: metallb_webhook_endpoint
+          until: metallb_webhook_endpoint.rc == 0 and metallb_webhook_endpoint.stdout != ""
+          retries: 30
+          delay: 3
+          changed_when: false
+
+        - name: Apply metallb IP pool and L2 advertisement
+          ansible.builtin.command: >-
+            kubectl --validate=false apply -f {{ k8s_manifests_dir }}/metallb.yml
+          register: metallb_pool_apply
+          until: metallb_pool_apply.rc == 0
+          retries: 10
+          delay: 5
+          changed_when: "'configured' in metallb_pool_apply.stdout or 'created' in metallb_pool_apply.stdout"
+
+        - name: Remove stale non-running metallb speaker pods
+          ansible.builtin.shell: |
+            kubectl delete pods -n {{ metallb_namespace }} \
+              -l app.kubernetes.io/component=speaker \
+              --field-selector=status.phase!=Running \
+              --ignore-not-found
+          changed_when: false
+          failed_when: false
+
+        - name: Wait for metallb speaker daemonset rollout
+          ansible.builtin.command: >-
+            kubectl rollout status daemonset/metallb-speaker
+            -n {{ metallb_namespace }} --timeout=300s
+          register: wait_metallb_speaker
+          until: wait_metallb_speaker.rc == 0
+          retries: 5
+          delay: 10
+          changed_when: false

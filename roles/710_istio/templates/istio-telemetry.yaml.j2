@@ -1,0 +1,10 @@
+apiVersion: telemetry.istio.io/v1
+kind: Telemetry
+metadata:
+  name: mesh-default
+  namespace: {{ istio_namespace }}
+spec:
+  tracing:
+  - providers:
+    - name: otel-tracing
+    randomSamplingPercentage: {{ istio_tracing_sampling_percentage | float }}

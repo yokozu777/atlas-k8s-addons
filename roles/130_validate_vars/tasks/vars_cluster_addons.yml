@@ -1,0 +1,60 @@
+---
+- name: Assert required cluster variables are set (addons)
+  ansible.builtin.assert:
+    that:
+      - dns_domain_suffix | default('') | length > 0
+      - k8s_cluster_domain | default('') | length > 0
+      - nexus_base_url | default('') | length > 0
+      - metallb_ip_pool | default('') | length > 0
+      - ingress_lb_ip | default('') | length > 0
+      - istio_ingress_lb_ip | default('') | length > 0
+      - dns_server_ip | default('') | length > 0
+      - external_dns_txt_owner_id | default('') | length > 0
+      - pki_ca_url | default('') | length > 0
+      - k8s_ca_cert_filename | default('') | length > 0
+      - k8s_secrets is defined
+      - k8s_ingress_apps | default([]) | length > 0
+      - helm_repos | default([]) | length > 0
+      - k8s_platform_namespaces | default([]) | length > 0
+      - k8s_users is defined
+      - k8s_users.elastic_superuser | default('') | length > 0
+      - k8s_users.elastic_logger | default('') | length > 0
+      - k8s_users.elastic_jaeger | default('') | length > 0
+      - jaeger_chart_version | default('') | length > 0
+      - external_secrets_chart_version | default('') | length > 0
+      - kibana_chart_version | default('') | length > 0
+      - vault_ha_replicas | default(0) | int >= 1
+      - (istio_tracing_sampling_percentage | default(100)) is number
+      - istio_tracing_sampling_percentage | default(100) | float >= 0
+      - istio_tracing_sampling_percentage | default(100) | float <= 100
+      - keycloak_cnpg_cluster_name | default('') | length > 0
+      - keycloak_cnpg_storage | default('') | length > 0
+      - keycloak_cnpg_instances | default(0) | int >= 1
+    fail_msg: >-
+      Addons platform variables missing — check group_vars/all/atlas-k8s-addons.yml
+      (ingress, observability, mesh, platform services)
+
+# clusterctl extra-vars are the leaf overlay: enable flag + oidc_issuer_url, not
+# sibling catalog kube_oidc_*. Role 940 defaults are not loaded during 130.
+- name: Load kube-apiserver OIDC role defaults
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../940_apiserver_oidc/defaults/main.yml"
+  when: kube_apiserver_oidc_enabled | default(false) | bool
+
+- name: Derive kube-apiserver OIDC issuer from Keycloak
+  ansible.builtin.set_fact:
+    kube_oidc_issuer_url: "{{ kube_oidc_issuer_url | default(oidc_issuer_url, true) }}"
+  when: kube_apiserver_oidc_enabled | default(false) | bool
+
+- name: Assert kube-apiserver OIDC issuer when enabled
+  ansible.builtin.assert:
+    that:
+      - oidc_issuer_url | default('') | length > 0
+      - kube_oidc_issuer_url | default('') | length > 0
+      - kube_oidc_client_id | default('') | length > 0
+      - kube_oidc_ca_file | default('') | length > 0
+    fail_msg: >-
+      kube_apiserver_oidc_enabled=true requires oidc_issuer_url (Keycloak issuer
+      on the leaf). kube_oidc_issuer_url follows it; kube_oidc_client_id and
+      kube_oidc_ca_file come from roles/940_apiserver_oidc/defaults unless overridden.
+  when: kube_apiserver_oidc_enabled | default(false) | bool

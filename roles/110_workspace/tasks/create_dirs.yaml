@@ -1,0 +1,35 @@
+---
+- name: Build workspace directory list
+  ansible.builtin.set_fact:
+    _workspace_dirs:
+      - "{{ cluster_workspace_root }}"
+      - "{{ controller_workspace | default('') }}"
+      - "{{ controller_manifests_dir | default('') }}"
+      - "{{ controller_workspace | default('') }}/kubeconfig"
+      - "{{ controller_reports_dir | default('') }}"
+      - "{{ controller_python_venv | default('') }}"
+      - "{{ controller_bin_dir | default('') }}"
+      - "{{ controller_helm_config_dir | default('') }}"
+      - "{{ controller_helm_cache_dir | default(controller_helm_config_dir ~ '/cache') }}"
+      - "{{ controller_ca_cert_dir | default('') }}"
+      - "{{ controller_staging_dir | default('') }}"
+      - "{{ controller_secrets_dir | default('') }}"
+      - "{{ k8s_control_plane_scripts_dir | default('') }}"
+      - "{{ keycloak_tf_workspace | default('') }}"
+      - "{{ k8s_kibana_chart_dir | default('') }}"
+      - "{{ cluster_workspace_root }}/.ansible"
+      - "{{ cluster_workspace_root }}/.ansible/tmp"
+      - "{{ cluster_workspace_root }}/.ansible_facts_cache"
+      - "{{ provision_tf_state_local_dir | default('') }}"
+      - "{{ provision_tf_workspace_dir | default('') }}"
+      - "{{ cluster_workspace_root }}/build"
+      - "{{ build_workdir | default('') }}"
+      - "{{ cluster_workspace_root }}/generated"
+      - "{{ cluster_workspace_root }}/logs"
+
+- name: Ensure workspace directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop: "{{ _workspace_dirs | unique | reject('equalto', '') | list }}"

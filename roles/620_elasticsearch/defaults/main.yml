@@ -1,0 +1,16 @@
+---
+# Operator catalog: group_vars/all/atlas-k8s-addons.yml (deep knobs in role tasks/templates).
+elasticsearch_wait_retries: 1000
+elasticsearch_wait_delay: 5
+elasticsearch_ilm_delete_after: 7d
+elasticsearch_logs_index_replicas: 0
+elasticsearch_snapshot_backend: rook-rgw
+elasticsearch_snapshot_storage_class: ceph-bucket
+elasticsearch_snapshot_obc_name: elasticsearch-snapshots
+elasticsearch_snapshot_repo_name: atlas-logs
+elasticsearch_slm_schedule: "0 30 1 * * ?"
+elasticsearch_slm_expire_after: 30d
+elasticsearch_snapshot_s3_endpoint: ""
+elasticsearch_snapshot_s3_bucket: ""
+elasticsearch_snapshot_s3_protocol: https
+elasticsearch_s3_credentials_secret: elastic-s3-credentials

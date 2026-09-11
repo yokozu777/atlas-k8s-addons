@@ -1,0 +1,144 @@
+---
+- name: Skip kube-apiserver OIDC when disabled
+  ansible.builtin.debug:
+    msg: kube_apiserver_oidc_enabled is false; not configuring OIDC on kube-apiserver
+  when: not (kube_apiserver_oidc_enabled | default(false) | bool)
+
+- name: Configure kube-apiserver OIDC after Keycloak
+  when: kube_apiserver_oidc_enabled | default(false) | bool
+  block:
+    - name: Install OIDC issuer CA on control-plane node
+      ansible.builtin.include_tasks: install_oidc_ca.yaml
+
+    - name: Stat kube-apiserver static pod
+      ansible.builtin.stat:
+        path: "{{ kube_oidc_apiserver_manifest }}"
+      register: kube_oidc_pod_stat
+
+    - name: Slurp kube-apiserver static pod
+      ansible.builtin.slurp:
+        src: "{{ kube_oidc_apiserver_manifest }}"
+      register: kube_oidc_pod_slurp
+      when: kube_oidc_pod_stat.stat.exists | default(false)
+
+    - name: Read live kubeadm ClusterConfiguration
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig
+          - "{{ k8s_kubeadm_admin_kubeconfig }}"
+          - get
+          - configmap
+          - kubeadm-config
+          - --namespace
+          - kube-system
+          - --output
+          - jsonpath={.data.ClusterConfiguration}
+      register: kube_oidc_cluster_config_raw
+      changed_when: false
+
+    - name: Set desired OIDC extraArgs
+      ansible.builtin.set_fact:
+        kube_oidc_pod_text: "{{ (kube_oidc_pod_slurp.content | b64decode) if not (kube_oidc_pod_slurp.skipped | default(false)) else '' }}"
+        kube_oidc_desired_extra_args:
+          - name: oidc-issuer-url
+            value: "{{ kube_oidc_issuer_url }}"
+          - name: oidc-client-id
+            value: "{{ kube_oidc_client_id }}"
+          - name: oidc-username-claim
+            value: "{{ kube_oidc_username_claim }}"
+          - name: oidc-username-prefix
+            value: "{{ kube_oidc_username_prefix }}"
+          - name: oidc-groups-claim
+            value: "{{ kube_oidc_groups_claim }}"
+          - name: oidc-ca-file
+            value: "{{ kube_oidc_ca_file }}"
+
+    - name: Merge OIDC extraArgs and detect drift
+      ansible.builtin.set_fact:
+        kube_oidc_sidecar_yaml: "{{ kube_oidc_cluster_config_raw.stdout | oidc_merge_cluster_config(kube_oidc_desired_extra_args) }}"
+        kube_oidc_pod_has_flags: "{{ kube_oidc_pod_text | oidc_pod_has_flags(kube_oidc_desired_extra_args) }}"
+        kube_oidc_cm_has_flags: "{{ kube_oidc_cluster_config_raw.stdout | oidc_cm_has_flags(kube_oidc_desired_extra_args) }}"
+
+    - name: Set OIDC rewrite, CA reload, and upload flags
+      ansible.builtin.set_fact:
+        kube_oidc_need_rewrite: "{{ not (kube_oidc_pod_has_flags | bool) }}"
+        kube_oidc_need_ca_reload: "{{ kube_oidc_ca_assemble.changed | default(false) | bool }}"
+        kube_oidc_need_upload: "{{ not (kube_oidc_cm_has_flags | bool) }}"
+
+    - name: Write kubeadm ClusterConfiguration sidecar for OIDC
+      ansible.builtin.copy:
+        dest: "{{ kube_oidc_kubeadm_config }}"
+        content: "{{ kube_oidc_sidecar_yaml }}"
+        mode: "0644"
+      when: (kube_oidc_need_rewrite | bool) or (kube_oidc_need_upload | bool)
+
+    - name: Rewrite kube-apiserver static pod for OIDC
+      ansible.builtin.command:
+        argv:
+          - kubeadm
+          - init
+          - phase
+          - control-plane
+          - apiserver
+          - --config
+          - "{{ kube_oidc_kubeadm_config }}"
+      register: kube_oidc_apiserver_phase
+      changed_when: true
+      when: kube_oidc_need_rewrite | bool
+
+    - name: Find kube-apiserver container to reload OIDC CA
+      ansible.builtin.command:
+        argv:
+          - crictl
+          - ps
+          - --name
+          - kube-apiserver
+          - -q
+      register: kube_oidc_apiserver_cid
+      changed_when: false
+      retries: 15
+      delay: 2
+      until: kube_oidc_apiserver_cid.stdout_lines | default([]) | length > 0
+      when:
+        - kube_oidc_need_ca_reload | bool
+        - not (kube_oidc_need_rewrite | bool)
+
+    - name: Stop kube-apiserver so kubelet reloads OIDC CA
+      ansible.builtin.command:
+        argv:
+          - crictl
+          - stop
+          - "{{ item }}"
+      loop: "{{ kube_oidc_apiserver_cid.stdout_lines | default([]) }}"
+      when:
+        - kube_oidc_need_ca_reload | bool
+        - not (kube_oidc_need_rewrite | bool)
+
+    - name: Wait for kube-apiserver healthz after OIDC rewrite
+      ansible.builtin.uri:
+        url: https://127.0.0.1:6443/healthz
+        method: GET
+        validate_certs: false
+        status_code: 200
+      register: kube_oidc_apiserver_healthz
+      retries: 30
+      delay: 2
+      until: kube_oidc_apiserver_healthz.status | default(0) == 200
+      when: (kube_oidc_need_rewrite | bool) or (kube_oidc_need_ca_reload | bool)
+
+    - name: Upload kubeadm ClusterConfiguration so upgrades keep OIDC flags
+      ansible.builtin.command:
+        argv:
+          - kubeadm
+          - init
+          - phase
+          - upload-config
+          - kubeadm
+          - --config
+          - "{{ kube_oidc_kubeadm_config }}"
+      register: kube_oidc_upload_config
+      changed_when: true
+      when:
+        - kube_oidc_need_upload | bool
+        - inventory_hostname == groups[k8s_master_hosts | default('k8s_masters')][0]

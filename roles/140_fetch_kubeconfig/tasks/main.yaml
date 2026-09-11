@@ -1,0 +1,26 @@
+---
+- name: Stat controller kubeconfig before fetch
+  ansible.builtin.stat:
+    path: "{{ controller_kubeconfig }}"
+  register: k8s_fetch_kubeconfig_controller_stat
+
+- name: Decide whether controller kubeconfig fetch is needed
+  ansible.builtin.set_fact:
+    k8s_fetch_kubeconfig_needed: >-
+      {{
+        not (
+          k8s_fetch_kubeconfig_controller_stat.stat.exists | default(false) | bool
+          and k8s_fetch_kubeconfig_controller_stat.stat.size | default(0) | int > 0
+        )
+      }}
+
+- name: Skip kubeconfig fetch when controller kubeconfig is already present
+  ansible.builtin.debug:
+    msg: >-
+      Controller kubeconfig {{ controller_kubeconfig }} already present;
+      skipping SSH fetch (140_fetch_kubeconfig).
+  when: not k8s_fetch_kubeconfig_needed | bool
+
+- name: Fetch cluster admin kubeconfig from control-plane node
+  ansible.builtin.import_tasks: fetch.yaml
+  when: k8s_fetch_kubeconfig_needed | bool

@@ -1,0 +1,130 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mailu-unbound
+  namespace: {{ mailu_namespace }}
+  labels:
+    app.kubernetes.io/name: mailu-unbound
+    app.kubernetes.io/part-of: mailu
+data:
+  unbound.conf: |
+    server:
+      verbosity: 1
+      interface: 0.0.0.0
+      port: 53
+      do-ip4: yes
+      do-ip6: no
+      do-udp: yes
+      do-tcp: yes
+      do-daemonize: no
+      chroot: ""
+      username: unbound
+      directory: "/etc/unbound"
+      auto-trust-anchor-file: "/etc/unbound/trusted-key.key"
+      root-hints: "/etc/unbound/root.hints"
+      hide-identity: yes
+      hide-version: yes
+      harden-glue: yes
+      harden-dnssec-stripped: yes
+      edns-buffer-size: 1232
+      cache-min-ttl: 60
+      prefetch: yes
+      num-threads: 1
+      msg-cache-size: 4m
+      rrset-cache-size: 4m
+      access-control: 127.0.0.0/8 allow
+      access-control: {{ pod_subnet }} allow
+      access-control: {{ service_subnet | default('10.0.0.0/12') }} allow
+      private-domain: "{{ k8s_dns_domain }}"
+      domain-insecure: "{{ k8s_dns_domain }}"
+    forward-zone:
+      name: "{{ k8s_dns_domain }}."
+      forward-addr: {{ cluster_dns_ip | default('10.0.0.10') }}
+    forward-zone:
+      name: "."
+      forward-addr: 1.1.1.1
+      forward-addr: 1.0.0.1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mailu-unbound
+  namespace: {{ mailu_namespace }}
+  labels:
+    app.kubernetes.io/name: mailu-unbound
+    app.kubernetes.io/part-of: mailu
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mailu-unbound
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mailu-unbound
+        app.kubernetes.io/part-of: mailu
+    spec:
+      containers:
+        - name: unbound
+          image: {{ mailu_unbound_image }}
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/sbin/unbound", "-d", "-c", "/config/unbound.conf"]
+          ports:
+            - name: dns-udp
+              containerPort: 53
+              protocol: UDP
+            - name: dns-tcp
+              containerPort: 53
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          startupProbe:
+            tcpSocket:
+              port: dns-tcp
+            periodSeconds: 2
+            failureThreshold: 15
+          readinessProbe:
+            tcpSocket:
+              port: dns-tcp
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: dns-tcp
+            periodSeconds: 20
+            timeoutSeconds: 3
+      volumes:
+        - name: config
+          configMap:
+            name: mailu-unbound
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mailu-unbound
+  namespace: {{ mailu_namespace }}
+  labels:
+    app.kubernetes.io/name: mailu-unbound
+    app.kubernetes.io/part-of: mailu
+spec:
+  clusterIP: {{ mailu_unbound_cluster_ip }}
+  ports:
+    - name: dns-udp
+      port: 53
+      protocol: UDP
+      targetPort: dns-udp
+    - name: dns-tcp
+      port: 53
+      protocol: TCP
+      targetPort: dns-tcp
+  selector:
+    app.kubernetes.io/name: mailu-unbound

@@ -1,0 +1,44 @@
+---
+# Resolve controller OS from release files on disk (not cached ansible_facts).
+- name: Probe Alpine release file on controller
+  ansible.builtin.stat:
+    path: /etc/alpine-release
+  register: controller_alpine_release
+  failed_when: false
+
+- name: Probe Oracle Linux release file on controller
+  ansible.builtin.stat:
+    path: /etc/oracle-release
+  register: controller_oracle_release
+  failed_when: false
+
+- name: Read controller OS ID from os-release
+  ansible.builtin.shell: |
+    set -euo pipefail
+    . /etc/os-release
+    printf '%s' "${ID}"
+  args:
+    executable: /bin/bash
+  register: controller_os_id_cmd
+  changed_when: false
+  failed_when: false
+  when:
+    - not (controller_alpine_release.stat.exists | default(false) | bool)
+    - not (controller_oracle_release.stat.exists | default(false) | bool)
+
+- name: Resolve controller OS family for package installation
+  ansible.builtin.set_fact:
+    controller_os_family: >-
+      {{
+        'alpine'
+        if (controller_alpine_release.stat.exists | default(false) | bool)
+        else (
+          'oracle'
+          if (controller_oracle_release.stat.exists | default(false) | bool)
+          else (
+            controller_os_id_cmd.stdout | default('') | trim
+            if (controller_os_id_cmd.stdout | default('') | trim) in ['ubuntu', 'debian']
+            else 'unknown'
+          )
+        )
+      }}

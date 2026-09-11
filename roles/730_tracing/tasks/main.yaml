@@ -1,0 +1,84 @@
+    - name: Remove jaeger Helm chart (absent)
+      when: jaeger_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: jaeger
+            namespace: "{{ tracing_namespace }}"
+        helm_chart_absent_ingress_app_names:
+          - jaeger
+        helm_chart_absent_extra_manifests:
+          - "{{ k8s_manifests_dir }}/jaeger-servicemonitor.yaml"
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/jaeger.yaml"
+          - "{{ k8s_manifests_dir }}/jaeger-servicemonitor.yaml"
+
+    - name: Install/configure jaeger chart
+      when: jaeger_chart_state | default('present') == 'present'
+      block:
+        - name: Wait until Elasticsearch reserved user can authenticate
+          ansible.builtin.include_role:
+            name: 620_elasticsearch
+            tasks_from: wait_ready.yml
+
+        - name: Render jaeger helm values
+          ansible.builtin.template:
+            src: jaeger.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/jaeger.yaml"
+            mode: '0644'
+
+        - name: Helming jaeger
+          ansible.builtin.command: >-
+            helm upgrade --install {{ item }}
+            --create-namespace
+            {{ jaeger_chart_version | helm_chart_version_args }}
+          loop:
+            - jaeger jaegertracing/jaeger --namespace {{ tracing_namespace }} -f {{ k8s_manifests_dir }}/jaeger.yaml
+
+        - name: Wait for Jaeger deployment
+          ansible.builtin.shell: >
+            kubectl wait deployment jaeger
+            --namespace {{ tracing_namespace }}
+            --for=condition=Available
+            --timeout=300s
+          register: wait_jaeger
+          until: wait_jaeger.rc == 0
+          retries: 30
+          delay: 10
+
+        - name: Render Jaeger ServiceMonitors
+          ansible.builtin.template:
+            src: jaeger-servicemonitor.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/jaeger-servicemonitor.yaml"
+            mode: '0644'
+
+        - name: Apply Jaeger ServiceMonitors
+          ansible.builtin.command: >-
+            kubectl --validate=false apply -f {{ k8s_manifests_dir }}/jaeger-servicemonitor.yaml
+
+    - name: Remove opentelemetry-collector Helm chart (absent)
+      when: opentelemetry_collector_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: opentelemetry-collector
+            namespace: "{{ tracing_namespace }}"
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/open-telemetry.yaml"
+
+    - name: Install/configure opentelemetry-collector chart
+      when: opentelemetry_collector_chart_state | default('present') == 'present'
+      block:
+        - name: Render opentelemetry-collector helm values
+          ansible.builtin.template:
+            src: open-telemetry.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/open-telemetry.yaml"
+            mode: '0644'
+
+        - name: Helming opentelemetry-collector
+          ansible.builtin.command: >-
+            helm upgrade --install {{ item }}
+            --create-namespace
+            {{ opentelemetry_collector_chart_version | helm_chart_version_args }}
+          loop:
+            - opentelemetry-collector open-telemetry/opentelemetry-collector --set image.repository={{ otel_collector_image }} --namespace {{ tracing_namespace }} -f {{ k8s_manifests_dir }}/open-telemetry.yaml

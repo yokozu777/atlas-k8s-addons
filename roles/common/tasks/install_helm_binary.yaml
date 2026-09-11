@@ -1,0 +1,37 @@
+---
+- name: Ensure staging directory exists for helm binary install
+  ansible.builtin.file:
+    path: "{{ install_helm_staging_dir }}"
+    state: directory
+    mode: '0700'
+
+- name: Check installed helm client version
+  ansible.builtin.command: "{{ install_helm_dest }} version --template '{{ '{{' }}.Version{{ '}}' }}'"
+  register: install_helm_version_cmd
+  changed_when: false
+  failed_when: false
+
+- name: Download helm archive
+  ansible.builtin.get_url:
+    url: "{{ helm_version }}"
+    dest: "{{ install_helm_staging_dir }}/{{ helm_version | basename }}"
+    mode: '0644'
+  when: >-
+    install_helm_version_cmd.rc != 0
+    or (helm_version | regex_search('helm-v([0-9.]+)', '\\1') | first | default(''))
+       not in (install_helm_version_cmd.stdout | default(''))
+
+- name: Install helm binary
+  ansible.builtin.shell: |
+    set -euo pipefail
+    archive="{{ install_helm_staging_dir }}/{{ helm_version | basename }}"
+    tmpdir="$(mktemp -d)"
+    trap 'rm -rf "$tmpdir"' EXIT
+    tar -xzf "$archive" -C "$tmpdir"
+    install -m 0755 "$tmpdir/linux-amd64/helm" "{{ install_helm_dest }}"
+  args:
+    executable: /bin/bash
+  when: >-
+    install_helm_version_cmd.rc != 0
+    or (helm_version | regex_search('helm-v([0-9.]+)', '\\1') | first | default(''))
+       not in (install_helm_version_cmd.stdout | default(''))

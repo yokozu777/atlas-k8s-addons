@@ -1,0 +1,48 @@
+# Extra RBAC for csi-resizer (VolumeAttributesClass, K8s 1.29+).
+# Do not patch the helm-managed ClusterRole — SSA conflicts with ceph-csi-drivers chart.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ rook_operator_namespace }}-csi-volumeattributesclass-reader
+  labels:
+    app.kubernetes.io/managed-by: atlas-k8s-addons
+rules:
+  - apiGroups:
+      - storage.k8s.io
+    resources:
+      - volumeattributesclasses
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ rook_operator_namespace }}-rbd-csi-vac-reader
+  labels:
+    app.kubernetes.io/managed-by: atlas-k8s-addons
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ rook_operator_namespace }}-csi-volumeattributesclass-reader
+subjects:
+  - kind: ServiceAccount
+    name: {{ rook_operator_namespace }}-rbd-csi-ceph-com-ctrlplugin-sa
+    namespace: {{ rook_operator_namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ rook_operator_namespace }}-cephfs-csi-vac-reader
+  labels:
+    app.kubernetes.io/managed-by: atlas-k8s-addons
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ rook_operator_namespace }}-csi-volumeattributesclass-reader
+subjects:
+  - kind: ServiceAccount
+    name: {{ rook_operator_namespace }}-cephfs-csi-ceph-com-ctrlplugin-sa
+    namespace: {{ rook_operator_namespace }}

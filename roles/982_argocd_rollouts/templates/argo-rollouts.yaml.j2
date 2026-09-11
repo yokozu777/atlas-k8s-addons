@@ -1,0 +1,11 @@
+# HTTPRoute + Envoy OIDC for {{ argo_rollouts_host }} is created by 961_apply_oidc_ingress (560 skips oidc_auth).
+dashboard:
+  enabled: true
+  ingress:
+    enabled: false
+
+controller:
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true

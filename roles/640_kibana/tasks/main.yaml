@@ -1,0 +1,241 @@
+    - name: Remove kibana Helm chart (absent)
+      when: kibana_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: kibana
+            namespace: "{{ logging_namespace }}"
+        helm_chart_absent_ingress_app_names:
+          - kibana
+        helm_chart_absent_extra_resources:
+          - api_version: v1
+            kind: Secret
+            name: kibana-kibana-es-token
+            namespace: "{{ logging_namespace }}"
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/kibana.yaml"
+          - "{{ k8s_manifests_dir }}/.kibana-values-checksum"
+    - name: Install/configure kibana chart
+      when: kibana_chart_state | default('present') == 'present'
+      block:
+        - name: Wait until Elasticsearch reserved user can authenticate
+          ansible.builtin.include_role:
+            name: 620_elasticsearch
+            tasks_from: wait_ready.yml
+    
+        - name: Stat rendered kibana helm values
+          ansible.builtin.stat:
+            path: "{{ k8s_manifests_dir }}/kibana.yaml"
+            checksum_algorithm: sha1
+          register: kibana_values_stat
+    
+        - name: Resolve kibana values checksum
+          ansible.builtin.set_fact:
+            kibana_values_checksum: >-
+              {{ kibana_values_stat.stat.checksum | default('') }}:{{ kibana_chart_version | trim }}
+    
+        - name: Check if kibana Helm release exists
+          ansible.builtin.command: >-
+            helm list -n {{ logging_namespace }} -o json -f ^kibana$
+          environment:
+            KUBECONFIG: "{{ k8s_kubeconfig }}"
+          register: kibana_release_json
+          changed_when: false
+          failed_when: false
+    
+        - name: Read kibana values checksum marker
+          ansible.builtin.slurp:
+            src: "{{ k8s_manifests_dir }}/.kibana-values-checksum"
+          register: kibana_values_checksum_file
+          failed_when: false
+    
+        - name: Resolve kibana helm mode
+          ansible.builtin.set_fact:
+            kibana_release_exists: >-
+              {{ (kibana_release_json.stdout | default('[]') | from_json | length) > 0 }}
+            kibana_helm_status: >-
+              {{
+                (kibana_release_json.stdout | default('[]') | from_json | first | default({})).status
+                | default('')
+              }}
+            kibana_values_changed: >-
+              {{
+                (
+                  kibana_values_checksum_file is defined
+                  and kibana_values_checksum_file.content is defined
+                  and (kibana_values_checksum_file.content | length) > 0
+                  and kibana_values_checksum | default('')
+                  != (kibana_values_checksum_file.content | b64decode | trim)
+                )
+              }}
+    
+        - name: Resolve kibana helm actions
+          ansible.builtin.set_fact:
+            kibana_needs_initial_install: >-
+              {{ not (kibana_release_exists | bool) }}
+            kibana_skip_helm: >-
+              {{
+                (kibana_release_exists | bool)
+                and (kibana_helm_status | trim) == 'deployed'
+                and not (kibana_values_changed | bool)
+              }}
+            kibana_needs_helm_upgrade: >-
+              {{
+                (kibana_release_exists | bool)
+                and not (
+                  (kibana_helm_status | trim) == 'deployed'
+                  and not (kibana_values_changed | bool)
+                )
+              }}
+    
+        - name: Seed kibana values checksum marker on existing release
+          ansible.builtin.copy:
+            dest: "{{ k8s_manifests_dir }}/.kibana-values-checksum"
+            content: "{{ kibana_values_checksum }}\n"
+            mode: '0644'
+          when:
+            - kibana_release_exists | bool
+            - kibana_values_checksum is defined
+            - not (
+                kibana_values_checksum_file is defined
+                and kibana_values_checksum_file.content is defined
+                and (kibana_values_checksum_file.content | length) > 0
+              )
+    
+        - name: Skip kibana helm on unchanged release
+          ansible.builtin.debug:
+            msg: kibana already deployed; skipping helm upgrade
+          when: kibana_skip_helm | bool
+    
+        - name: Clear stuck kibana helm operation lock
+          ansible.builtin.shell: |
+            set -euo pipefail
+            status='{{ kibana_helm_status | trim }}'
+            revision='{{ (kibana_release_json.stdout | default("[]") | from_json | first | default({})).revision | default("") }}'
+            if [[ "$status" == pending-* && -n "$revision" ]]; then
+              kubectl delete secret -n {{ logging_namespace }} "sh.helm.release.v1.kibana.v${revision}" --ignore-not-found
+            fi
+          args:
+            executable: /bin/bash
+          environment:
+            KUBECONFIG: "{{ k8s_kubeconfig }}"
+          when:
+            - not (kibana_skip_helm | bool)
+            - kibana_helm_status is match('^pending-')
+          changed_when: false
+    
+        - name: Refresh kibana helm scripts ConfigMap from chart
+          ansible.builtin.shell: |
+            set -o pipefail
+            helm template kibana {{ k8s_kibana_chart_dir }} \
+              --namespace {{ logging_namespace }} \
+              -f {{ k8s_manifests_dir }}/kibana.yaml \
+              --show-only templates/configmap-helm-scripts.yaml \
+              | kubectl apply -f -
+          args:
+            executable: /bin/bash
+          environment: "{{ _helm_kube_env }}"
+          when: not (kibana_skip_helm | bool)
+    
+        - name: Remove stale pre-install Kibana hook job
+          ansible.builtin.command: >-
+            kubectl delete job pre-install-kibana-kibana
+            -n {{ logging_namespace }}
+            --ignore-not-found
+          environment:
+            KUBECONFIG: "{{ k8s_kubeconfig }}"
+          when: not (kibana_skip_helm | bool)
+          changed_when: false
+          failed_when: false
+    
+        - name: Remove stale Kibana ES token secret before helm upgrade
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Secret
+            name: kibana-kibana-es-token
+            namespace: "{{ logging_namespace }}"
+          environment:
+            KUBECONFIG: "{{ k8s_kubeconfig }}"
+          when: not (kibana_skip_helm | bool)
+    
+        - name: Helming kibana (initial install)
+          ansible.builtin.command: >-
+            helm upgrade --install kibana {{ k8s_kibana_chart_dir }}/
+            --namespace {{ logging_namespace }}
+            --create-namespace
+            -f {{ k8s_manifests_dir }}/kibana.yaml
+            --timeout 15m
+            {{ kibana_chart_version | helm_chart_version_args }}
+          environment: "{{ _helm_kube_env }}"
+          register: kibana_helm_initial
+          when: kibana_needs_initial_install | bool
+          changed_when: kibana_helm_initial.rc == 0
+    
+        - name: Helming kibana (upgrade with values sync)
+          ansible.builtin.command: >-
+            helm upgrade --install kibana {{ k8s_kibana_chart_dir }}/
+            --namespace {{ logging_namespace }}
+            --create-namespace
+            -f {{ k8s_manifests_dir }}/kibana.yaml
+            --reuse-values
+            --force-conflicts
+            --timeout 15m
+            {{ kibana_chart_version | helm_chart_version_args }}
+          environment: "{{ _helm_kube_env }}"
+          register: kibana_helm_values_sync
+          when:
+            - kibana_needs_helm_upgrade | bool
+            - not (kibana_needs_initial_install | bool)
+            - kibana_values_changed | bool
+          changed_when: kibana_helm_values_sync.rc == 0
+    
+        - name: Helming kibana (heal or chart upgrade)
+          ansible.builtin.command: >-
+            helm upgrade --install kibana {{ k8s_kibana_chart_dir }}/
+            --namespace {{ logging_namespace }}
+            --create-namespace
+            --reuse-values
+            --force-conflicts
+            --timeout 15m
+            {{ kibana_chart_version | helm_chart_version_args }}
+          environment: "{{ _helm_kube_env }}"
+          register: kibana_helm_upgrade
+          when:
+            - kibana_needs_helm_upgrade | bool
+            - not (kibana_needs_initial_install | bool)
+            - not (kibana_values_changed | bool)
+          changed_when: kibana_helm_upgrade.rc == 0
+    
+        - name: Restart Kibana after ES token refresh
+          ansible.builtin.command: >-
+            kubectl rollout restart deployment/kibana-kibana
+            -n {{ logging_namespace }}
+          environment:
+            KUBECONFIG: "{{ k8s_kubeconfig }}"
+          when: not (kibana_skip_helm | bool)
+          register: kibana_rollout_restart
+          changed_when: kibana_rollout_restart.rc == 0
+    
+        - name: Wait for Kibana deployment to be ready
+          ansible.builtin.command: >-
+            kubectl rollout status deployment/kibana-kibana
+            -n {{ logging_namespace }}
+            --timeout=10m
+          environment:
+            KUBECONFIG: "{{ k8s_kubeconfig }}"
+          when: not (kibana_skip_helm | bool)
+          changed_when: false
+    
+        - name: Record applied kibana values checksum
+          ansible.builtin.copy:
+            dest: "{{ k8s_manifests_dir }}/.kibana-values-checksum"
+            content: "{{ kibana_values_checksum }}\n"
+            mode: '0644'
+          when:
+            - kibana_values_checksum is defined
+            - >-
+              (kibana_helm_initial is defined and kibana_helm_initial.rc | default(1) == 0)
+              or (kibana_helm_values_sync is defined and kibana_helm_values_sync.rc | default(1) == 0)
+              or (kibana_helm_upgrade is defined and kibana_helm_upgrade.rc | default(1) == 0)
+              or (kibana_skip_helm | default(false) | bool)

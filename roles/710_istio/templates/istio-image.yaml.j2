@@ -1,0 +1,3 @@
+global:
+  hub: {{ istio_image_hub | default('docker.io/istio') }}
+  tag: {% if istio_image_tag is defined and (istio_image_tag | string | trim) == '' %}latest{% elif istio_image_tag is defined and (istio_image_tag | string | trim) | length > 0 %}{{ istio_image_tag | trim }}{% else %}{{ istio_version | default('1.30.3') }}{% endif %}

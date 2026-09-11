@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Fetch files from the first control-plane node via SSH (sudo cat).
+# Rendered by common/tasks/fetch_control_plane_files.yaml; runs on the Ansible controller only.
+set -euo pipefail
+
+readonly DEST_DIR={{ k8s_control_plane_fetch_dest_dir | quote }}
+readonly SSH_TARGET={{ k8s_control_plane_ssh_target | quote }}
+
+mkdir -p "${DEST_DIR}"
+chmod 700 "${DEST_DIR}"
+
+ssh_cmd=(
+  ssh
+  -o BatchMode=yes
+  -o ConnectTimeout=30
+  -o StrictHostKeyChecking=no
+  -o UserKnownHostsFile=/dev/null
+{% if k8s_control_plane_ssh_private_key_file | length > 0 %}
+  -i {{ k8s_control_plane_ssh_private_key_file | quote }}
+{% endif %}
+{% for ssh_arg in k8s_control_plane_ssh_extra_args | default([]) %}
+  {{ ssh_arg | quote }}
+{% endfor %}
+)
+
+fetch_remote_file() {
+  local remote_path="$1"
+  local dest_path="$2"
+  local dest_mode="$3"
+  local tmp_path="${dest_path}.tmp.$$"
+
+  if ! "${ssh_cmd[@]}" "${SSH_TARGET}" sudo cat "${remote_path}" > "${tmp_path}"; then
+    echo "fetch_control_plane_files: failed to read ${remote_path} from ${SSH_TARGET}" >&2
+    rm -f "${tmp_path}"
+    return 1
+  fi
+
+  if [[ ! -s "${tmp_path}" ]]; then
+    echo "fetch_control_plane_files: ${remote_path} from ${SSH_TARGET} is empty" >&2
+    rm -f "${tmp_path}"
+    return 1
+  fi
+
+  chmod "${dest_mode}" "${tmp_path}"
+  mv -f "${tmp_path}" "${dest_path}"
+}
+
+{% for item in k8s_control_plane_fetch_remote_files %}
+{% set local_name = item.local | default(item.remote | basename) %}
+fetch_remote_file \
+  {{ item.remote | quote }} \
+  "${DEST_DIR}/{{ local_name }}" \
+  {{ item.mode | default('0644') | quote }}
+{% endfor %}

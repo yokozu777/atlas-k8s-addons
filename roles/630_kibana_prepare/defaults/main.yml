@@ -1,0 +1,11 @@
+---
+# Operator catalog: group_vars/all/atlas-k8s-addons.yml (deep knobs in role tasks/templates).
+# Repo elastic — 210_helm_bootstrap (use_internal_helm_repo: none|nexus|nginx)
+kibana_helm_chart_ref: elastic/kibana
+
+# Patch elastic/kibana chart jobs: chart references a node path that does not exist
+# in the container image; replace with the glibc-217 bundled node binary path.
+kibana_chart_pre_install_job_template: "{{ k8s_kibana_chart_dir }}/templates/pre-install-job.yaml"
+kibana_chart_post_delete_job_template: "{{ k8s_kibana_chart_dir }}/templates/post-delete-job.yaml"
+kibana_chart_node_command_search: 'command: ["{{ "{{" }} template "kibana.home_dir" . }}/node/bin/node"]'
+kibana_chart_node_command_replace: 'command: ["/usr/share/kibana/node/glibc-217/bin/node"]'

@@ -1,0 +1,195 @@
+    - name: Remove rook-cluster Helm chart (absent)
+      when: rook_cluster_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: rook-ceph-cluster
+            namespace: "{{ rook_cluster_namespace }}"
+        helm_chart_absent_delete_namespace: true
+        helm_chart_absent_namespaces:
+          - "{{ rook_cluster_namespace }}"
+        helm_chart_absent_ingress_app_names:
+          - rook-ceph-mgr-dashboard
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/rook_cluster_values.yaml"
+          - "{{ k8s_manifests_dir }}/rook_storage_nodes.yaml"
+          - "{{ k8s_manifests_dir }}/.rook-cluster-values-checksum"
+    - name: Install/configure rook_cluster chart
+      when: rook_cluster_chart_state | default('present') == 'present'
+      block:
+        - name: Load hosts inventory for Rook storage nodes
+          ansible.builtin.include_vars:
+            file: "{{ provision_hosts_file }}"
+            name: cluster_hosts
+
+        - name: Ensure RGW in-cluster TLS secret
+          ansible.builtin.include_tasks: rgw_tls.yml
+
+        - name: Render rook cluster helm values
+          ansible.builtin.template:
+            src: rook_cluster_values.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/rook_cluster_values.yaml"
+            mode: '0644'
+
+        - name: Render rook storage nodes overlay
+          ansible.builtin.template:
+            src: rook_storage_nodes.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/rook_storage_nodes.yaml"
+            mode: '0644'
+
+        - name: Stat rendered rook cluster helm values
+          ansible.builtin.stat:
+            path: "{{ item }}"
+            checksum_algorithm: sha1
+          loop:
+            - "{{ k8s_manifests_dir }}/rook_cluster_values.yaml"
+            - "{{ k8s_manifests_dir }}/rook_storage_nodes.yaml"
+          register: rook_cluster_values_stats
+    
+        - name: Resolve rook cluster values checksum
+          ansible.builtin.set_fact:
+            rook_cluster_values_checksum: >-
+              {{
+                rook_cluster_values_stats.results
+                | map(attribute='stat.checksum')
+                | join(':')
+              }}
+    
+        - name: Check if {{ rook_cluster_namespace }} Helm release exists
+          ansible.builtin.command: >-
+            helm list -n {{ rook_cluster_namespace }} -o json -f ^rook-ceph-cluster$
+          environment:
+            KUBECONFIG: "{{ k8s_kubeconfig }}"
+          register: rook_cluster_release_json
+          changed_when: false
+          failed_when: false
+    
+        - name: Read rook cluster values checksum marker
+          ansible.builtin.slurp:
+            src: "{{ k8s_manifests_dir }}/.rook-cluster-values-checksum"
+          register: rook_cluster_values_checksum_file
+          failed_when: false
+    
+        - name: Resolve rook cluster helm mode
+          ansible.builtin.set_fact:
+            rook_cluster_release_exists: >-
+              {{ (rook_cluster_release_json.stdout | default('[]') | from_json | length) > 0 }}
+            rook_cluster_helm_status: >-
+              {{
+                (rook_cluster_release_json.stdout | default('[]') | from_json | first | default({})).status
+                | default('')
+              }}
+            rook_cluster_values_changed: >-
+              {{
+                (
+                  rook_cluster_values_checksum_file is defined
+                  and rook_cluster_values_checksum_file.content is defined
+                  and (rook_cluster_values_checksum_file.content | length) > 0
+                  and rook_cluster_values_checksum | default('')
+                  != (rook_cluster_values_checksum_file.content | b64decode | trim)
+                )
+              }}
+    
+        - name: Resolve rook cluster helm actions
+          ansible.builtin.set_fact:
+            rook_cluster_needs_initial_install: >-
+              {{ not (rook_cluster_release_exists | bool) }}
+            rook_cluster_skip_helm: >-
+              {{
+                (rook_cluster_release_exists | bool)
+                and (rook_cluster_helm_status | trim) == 'deployed'
+                and not (rook_cluster_values_changed | bool)
+              }}
+            rook_cluster_needs_helm_upgrade: >-
+              {{
+                (rook_cluster_release_exists | bool)
+                and not (
+                  (rook_cluster_helm_status | trim) == 'deployed'
+                  and not (rook_cluster_values_changed | bool)
+                )
+              }}
+    
+        - name: Seed rook cluster values checksum marker on existing release
+          ansible.builtin.copy:
+            dest: "{{ k8s_manifests_dir }}/.rook-cluster-values-checksum"
+            content: "{{ rook_cluster_values_checksum }}\n"
+            mode: '0644'
+          when:
+            - rook_cluster_release_exists | bool
+            - rook_cluster_values_checksum is defined
+            - not (
+                rook_cluster_values_checksum_file is defined
+                and rook_cluster_values_checksum_file.content is defined
+                and (rook_cluster_values_checksum_file.content | length) > 0
+              )
+    
+        - name: Skip rook-cluster helm on unchanged release
+          ansible.builtin.debug:
+            msg: "{{ rook_cluster_namespace }} already deployed; skipping helm upgrade"
+          when: rook_cluster_skip_helm | bool
+    
+        - name: Helming rook-cluster (initial install)
+          ansible.builtin.command: >-
+            helm upgrade --install rook-ceph-cluster
+            rook-release/rook-ceph-cluster
+            --namespace {{ rook_cluster_namespace }}
+            --create-namespace
+            --set operatorNamespace={{ rook_operator_namespace }}
+            -f {{ k8s_manifests_dir }}/rook_cluster_values.yaml
+            -f {{ k8s_manifests_dir }}/rook_storage_nodes.yaml
+            {{ rook_cluster_chart_version | helm_chart_version_args }}
+          environment: "{{ _helm_kube_env }}"
+          register: rook_cluster_helm_initial
+          when: rook_cluster_needs_initial_install | bool
+          changed_when: rook_cluster_helm_initial.rc == 0
+    
+        - name: Helming rook-cluster (upgrade with values sync)
+          ansible.builtin.command: >-
+            helm upgrade --install rook-ceph-cluster
+            rook-release/rook-ceph-cluster
+            --namespace {{ rook_cluster_namespace }}
+            --create-namespace
+            --set operatorNamespace={{ rook_operator_namespace }}
+            -f {{ k8s_manifests_dir }}/rook_cluster_values.yaml
+            -f {{ k8s_manifests_dir }}/rook_storage_nodes.yaml
+            --reuse-values
+            --force-conflicts
+            {{ rook_cluster_chart_version | helm_chart_version_args }}
+          environment: "{{ _helm_kube_env }}"
+          register: rook_cluster_helm_values_sync
+          when:
+            - rook_cluster_needs_helm_upgrade | bool
+            - not (rook_cluster_needs_initial_install | bool)
+            - rook_cluster_values_changed | bool
+          changed_when: rook_cluster_helm_values_sync.rc == 0
+    
+        - name: Helming rook-cluster (heal or chart upgrade)
+          ansible.builtin.command: >-
+            helm upgrade --install rook-ceph-cluster
+            rook-release/rook-ceph-cluster
+            --namespace {{ rook_cluster_namespace }}
+            --create-namespace
+            --set operatorNamespace={{ rook_operator_namespace }}
+            --reuse-values
+            --force-conflicts
+            {{ rook_cluster_chart_version | helm_chart_version_args }}
+          environment: "{{ _helm_kube_env }}"
+          register: rook_cluster_helm_upgrade
+          when:
+            - rook_cluster_needs_helm_upgrade | bool
+            - not (rook_cluster_needs_initial_install | bool)
+            - not (rook_cluster_values_changed | bool)
+          changed_when: rook_cluster_helm_upgrade.rc == 0
+    
+        - name: Record applied rook cluster values checksum
+          ansible.builtin.copy:
+            dest: "{{ k8s_manifests_dir }}/.rook-cluster-values-checksum"
+            content: "{{ rook_cluster_values_checksum }}\n"
+            mode: '0644'
+          when:
+            - rook_cluster_values_checksum is defined
+            - >-
+              (rook_cluster_helm_initial is defined and rook_cluster_helm_initial.rc | default(1) == 0)
+              or (rook_cluster_helm_values_sync is defined and rook_cluster_helm_values_sync.rc | default(1) == 0)
+              or (rook_cluster_helm_upgrade is defined and rook_cluster_helm_upgrade.rc | default(1) == 0)
+              or (rook_cluster_skip_helm | default(false) | bool)

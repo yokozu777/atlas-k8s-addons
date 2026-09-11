@@ -1,0 +1,31 @@
+    - name: Remove trust-manager Helm chart (absent)
+      when: trust_manager_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: trust-manager
+            namespace: "{{ cert_manager_namespace }}"
+        helm_chart_absent_cluster_resources:
+          - api_version: admissionregistration.k8s.io/v1
+            kind: ValidatingWebhookConfiguration
+            name: trust-manager
+
+    - name: Install/configure trust_manager chart
+      when: trust_manager_chart_state | default('present') == 'present'
+      block:
+        - name: Helming trust-manager
+          ansible.builtin.command: >-
+            helm upgrade --install {{ item }}
+            --create-namespace
+            {{ trust_manager_chart_version | helm_chart_version_args }}
+          loop:
+            - trust-manager jetstack/trust-manager --namespace {{ cert_manager_namespace }}
+    
+        - name: Wait until trust-manager pod is ready
+          ansible.builtin.shell: >
+            kubectl get pod -n {{ cert_manager_namespace }} -l app=trust-manager
+            -o jsonpath='{.items[0].status.containerStatuses[0].ready}'
+          register: trust_ready
+          until: trust_ready.stdout == "true"
+          retries: 300
+          delay: 3

@@ -1,0 +1,175 @@
+---
+# Trust internal PKI on the Ansible controller (helm, python requests, git over HTTPS).
+# Org CA is not assumed to be baked into the executor image. Workspace merged
+# bundle is the SoT; system store is updated only when the controller is root.
+- name: Detect controller OS family for PKI trust installation
+  ansible.builtin.include_tasks: detect_controller_os.yaml
+  when: controller_os_family is not defined
+
+- name: Resolve controller uid for PKI trust
+  ansible.builtin.command:
+    argv:
+      - id
+      - -u
+  register: controller_uid_cmd
+  changed_when: false
+  when: controller_uid is not defined
+
+- name: Note controller uid for PKI trust
+  ansible.builtin.set_fact:
+    controller_uid: "{{ controller_uid_cmd.stdout | trim }}"
+  when: controller_uid is not defined
+
+- name: Ensure controller CA certificate directory exists
+  ansible.builtin.file:
+    path: "{{ controller_ca_cert_dir }}"
+    state: directory
+    mode: '0700'
+
+- name: Reset org CA download directory
+  ansible.builtin.file:
+    path: "{{ controller_ca_cert_dir }}/org"
+    state: absent
+
+- name: Ensure org CA download directory exists
+  ansible.builtin.file:
+    path: "{{ controller_ca_cert_dir }}/org"
+    state: directory
+    mode: '0700'
+
+- name: Ensure CA trust tooling is present on Alpine controller
+  ansible.builtin.apk:
+    name: ca-certificates
+    state: present
+    update_cache: false
+  become: true
+  when:
+    - controller_os_family == 'alpine'
+    - controller_uid | int == 0
+
+- name: Ensure CA trust tooling is present on Ubuntu controller
+  ansible.builtin.apt:
+    name: ca-certificates
+    state: present
+    update_cache: false
+    install_recommends: false
+  become: true
+  when:
+    - controller_os_family == 'ubuntu'
+    - controller_uid | int == 0
+
+- name: Ensure CA trust tooling is present on Debian controller
+  ansible.builtin.apt:
+    name: ca-certificates
+    state: present
+    update_cache: false
+    install_recommends: false
+  become: true
+  when:
+    - controller_os_family == 'debian'
+    - controller_uid | int == 0
+
+- name: Download internal PKI root certificates on controller
+  ansible.builtin.get_url:
+    url: "{{ item }}"
+    dest: >-
+      {{ controller_ca_cert_dir }}/org/{{ idx }}-{{ item | urlsplit('hostname') | replace('.', '-') }}.crt
+    mode: '0644'
+    validate_certs: false
+  loop: "{{ [pki_ca_url] if pki_ca_url is string else (pki_ca_url | list) }}"
+  loop_control:
+    index_var: idx
+    label: "{{ item }}"
+  register: controller_ca_download
+
+- name: List downloaded org CA certificates
+  ansible.builtin.find:
+    paths: "{{ controller_ca_cert_dir }}/org"
+    patterns: "*.crt"
+    file_type: file
+  register: controller_org_ca_find
+
+- name: Fail when no org CA certificates were downloaded
+  ansible.builtin.fail:
+    msg: >-
+      pki_ca_url is set but no certificates were downloaded into
+      {{ controller_ca_cert_dir }}/org
+  when: controller_org_ca_find.matched | default(0) | int < 1
+
+- name: Publish first org CA path for controller_ca_cert_path consumers
+  ansible.builtin.copy:
+    src: "{{ controller_ca_download.results[0].dest }}"
+    dest: "{{ controller_ca_cert_path }}"
+    mode: '0644'
+    remote_src: true
+
+- name: Merge system CA bundle with downloaded org roots
+  ansible.builtin.shell: |
+    set -euo pipefail
+    dest='{{ controller_ca_cert_dir }}/ca-bundle.crt'
+    tmp="${dest}.tmp"
+    if [ -f /etc/ssl/certs/ca-certificates.crt ]; then
+      cat /etc/ssl/certs/ca-certificates.crt > "$tmp"
+    elif [ -f /etc/pki/tls/certs/ca-bundle.crt ]; then
+      cat /etc/pki/tls/certs/ca-bundle.crt > "$tmp"
+    else
+      echo "controller: system CA bundle not found" >&2
+      exit 1
+    fi
+    cat '{{ controller_ca_cert_dir }}/org'/*.crt >> "$tmp"
+    mv "$tmp" "$dest"
+  args:
+    executable: /bin/bash
+  changed_when: controller_ca_download is changed
+
+- name: Remove stale custom CA certificate from controller image
+  ansible.builtin.file:
+    path: /usr/local/share/ca-certificates/custom_ca.crt
+    state: absent
+  register: controller_stale_ca_removed
+  become: true
+  when:
+    - controller_os_family in ['alpine', 'ubuntu', 'debian']
+    - controller_uid | int == 0
+
+- name: Install org CA certificates into Alpine or Debian system store
+  ansible.builtin.copy:
+    src: "{{ item.path }}"
+    dest: "/usr/local/share/ca-certificates/{{ item.path | basename }}"
+    mode: '0644'
+    remote_src: true
+  loop: "{{ controller_org_ca_find.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  register: controller_ca_installed
+  become: true
+  when:
+    - controller_os_family in ['alpine', 'ubuntu', 'debian']
+    - controller_uid | int == 0
+
+- name: Install org CA certificates into Oracle Linux system store
+  ansible.builtin.command:
+    cmd: trust anchor --store "{{ item.path }}"
+  loop: "{{ controller_org_ca_find.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  register: controller_ca_installed
+  changed_when: false
+  become: true
+  when:
+    - controller_os_family == 'oracle'
+    - controller_uid | int == 0
+
+- name: Update CA trust store on Alpine controller
+  ansible.builtin.command: update-ca-certificates
+  become: true
+  when:
+    - controller_os_family == 'alpine'
+    - controller_uid | int == 0
+
+- name: Update CA trust store on Ubuntu or Debian controller
+  ansible.builtin.command: update-ca-certificates
+  become: true
+  when:
+    - controller_os_family in ['ubuntu', 'debian']
+    - controller_uid | int == 0

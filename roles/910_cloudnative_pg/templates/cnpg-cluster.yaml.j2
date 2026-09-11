@@ -1,0 +1,16 @@
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ cnpg_cluster_name }}
+  namespace: {{ cnpg_cluster_namespace }}
+spec:
+  instances: {{ cnpg_cluster_instances | int }}
+  bootstrap:
+    initdb:
+      database: app
+      owner: app
+  storage:
+    size: {{ cnpg_cluster_storage }}
+  monitoring:
+    enablePodMonitor: true

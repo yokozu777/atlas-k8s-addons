@@ -1,0 +1,450 @@
+namespaceOverride: "{{ monitoring_namespace }}"
+
+# kube-prometheus-stack ServiceMonitor (do not duplicate kubernetes-apiservers in additionalScrapeConfigs).
+# {{ prometheus_kube_apiserver_scrape_interval }} — workaround apiserver→127.0.0.1:2379 (see group_vars/all/atlas-k8s-addons.yml).
+kubeApiServer:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: {{ prometheus_kube_apiserver_scrape_interval | default('60s') }}
+
+kubelet:
+  enabled: true
+  namespace: kube-system
+
+  serviceMonitor:
+
+    metricRelabelings:
+    - action: replace
+      sourceLabels:
+      - node
+      targetLabel: instance    
+    # metricRelabelings: []
+
+kubeControllerManager:
+  enabled: true
+
+  serviceMonitor:
+    enabled: true
+    ## Scrape interval. If not set, the Prometheus default scrape interval is used.
+
+    https: true
+
+    # Skip TLS certificate validation when scraping
+    insecureSkipVerify: "true"
+
+##
+kubeEtcd:
+  enabled: true
+
+  ## If your etcd is not deployed as a pod, specify IPs it can be found on
+  ##
+  endpoints: []
+  # - 10.141.4.22
+  # - 10.141.4.23
+  # - 10.141.4.24
+
+  ## Etcd service. If using kubeEtcd.endpoints only the port and targetPort are used
+  ##
+  service:
+    enabled: true
+    port: 2381
+    targetPort: 2381
+
+  serviceMonitor:
+    enabled: true
+
+    proxyUrl: ""
+    scheme: http
+    insecureSkipVerify: true
+    serverName: ""
+
+kubeScheduler:
+  enabled: true
+  serviceMonitor:
+    https: true
+    insecureSkipVerify: "true"
+
+# Calico dataplane; no kube-proxy DaemonSet. Disables Kubernetes / Proxy dashboard + SM.
+kubeProxy:
+  enabled: false
+
+# Linux nodes only — drop empty AIX/MacOS default dashboards.
+nodeExporter:
+  enabled: true
+  operatingSystems:
+    linux:
+      enabled: true
+    aix:
+      enabled: false
+    darwin:
+      enabled: false
+
+kube-state-metrics:
+  namespaceOverride: "{{ monitoring_namespace }}"
+
+prometheus-node-exporter:
+  namespaceOverride: "{{ monitoring_namespace }}"
+  prometheus:
+    monitor:
+      metricRelabelings:
+      - action: replace
+        regex: (.*)
+        replacement: $1
+        sourceLabels:
+        - __meta_kubernetes_pod_node_name
+        targetLabel: kubernetes_node
+
+prometheusOperator:
+  namespaces:
+    releaseNamespace: true
+    additional:
+     - kube-system
+     - {{ calico_system_namespace }}
+     - {{ istio_namespace }}
+     - {{ monitoring_namespace }}
+     - {{ cert_manager_namespace }}
+     - {{ external_dns_namespace }}
+     - {{ falco_namespace }}
+     - {{ graylog_namespace }}
+     - {{ headlamp_namespace }}
+     - {{ envoy_gateway_namespace }}
+     - {{ keycloak_namespace }}
+     - {{ cnpg_cluster_namespace }}
+     - {{ cnpg_operator_namespace }}
+     - {{ logging_namespace }}
+     - {{ metallb_namespace }}
+     - {{ oauth2_proxy_namespace }}
+     - {{ rook_cluster_namespace }}
+     - {{ sentry_namespace }}
+     - {{ tracing_namespace }}
+     - {{ trivy_namespace }}
+     - {{ opencost_namespace }}
+     - {{ vault_namespace }}
+     - {{ argocd_namespace }}
+     - {{ argo_rollouts_namespace }}
+     - {{ chaos_mesh_namespace }}
+     - {{ kyverno_namespace }}
+     - {{ policy_reporter_namespace }}
+  tls:
+    internalPort: 12250
+
+grafana:
+  grafana.ini:
+    auth:
+      oauth_auto_login: true
+      signout_redirect_url: "https://{{ grafana_host }}/logout"
+    auth.proxy:
+      enabled: true
+      header_name: X-Auth-Request-Email
+      header_property: email
+      headers: Name:X-Auth-Request-User
+      enable_login_token: false
+    users:
+      allow_sign_up: false
+      auto_assign_org: true
+      auto_assign_org_role: Admin
+  enabled: true
+  namespaceOverride: "{{ monitoring_namespace }}"
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+      - name: cluster-addons
+        orgId: 1
+        folder: 'Cluster addons'
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards/cluster-addons
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      searchNamespace: ALL
+      folderAnnotation: grafana_folder
+  dashboards:
+    cluster-addons:
+{% include 'grafana-dashboards.yaml.j2' %}
+
+  defaultDashboardsTimezone: {{ grafana_dashboards_timezone }}
+  adminPassword: {{ k8s_secrets.grafana_admin_password }}
+{% if thanos_chart_state | default('present') == 'present' %}
+  additionalDataSources:
+    - name: Thanos
+      type: prometheus
+      access: proxy
+      url: "{{ thanos_query_http_url }}"
+      isDefault: false
+      editable: false
+{% endif %}
+
+# Gateway API HTTPRoute (45/72); chart Ingress stays off.
+alertmanager:
+  enabled: true
+  ingress:
+    enabled: false
+  config:
+    global:
+      smtp_smarthost: "{{ alertmanager_mail.host }}:{{ alertmanager_mail.port }}"
+      smtp_from: "{{ alertmanager_mail.from }}"
+      smtp_require_tls: {{ alertmanager_mail.use_tls | bool | to_json }}
+{% if alertmanager_mail.username | default('') | length > 0 %}
+      smtp_auth_username: "{{ alertmanager_mail.username }}"
+      smtp_auth_password: "{{ k8s_secrets.alertmanager_smtp_password }}"
+{% endif %}
+    route:
+      receiver: email
+      group_by:
+        - alertname
+        - namespace
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 12h
+      routes:
+        - matchers:
+            - alertname = Watchdog
+          receiver: "null"
+    receivers:
+      - name: "null"
+      - name: email
+        email_configs:
+          - to: "{{ alertmanager_mail.to }}"
+            send_resolved: true
+{% if alertmanager_mail.insecure_skip_verify | default(false) | bool %}
+            tls_config:
+              insecure_skip_verify: true
+{% endif %}
+
+prometheus:
+  prometheusSpec:
+    enableRemoteWriteReceiver: true
+    scrapeProtocols:
+      - PrometheusText0.0.4
+      - OpenMetricsText1.0.0
+    ruleSelector: {}
+    ruleSelectorNilUsesHelmValues: false
+    ruleNamespaceSelector: {}
+    podMonitorSelector: {}
+    podMonitorSelectorNilUsesHelmValues: false
+    podMonitorNamespaceSelector: {}
+    probeSelector: {}
+    probeSelectorNilUsesHelmValues: false
+    probeNamespaceSelector: {}
+    serviceMonitorSelector: {}
+    serviceMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorNamespaceSelector: {}    
+    secrets: 
+      - etcd-client-cert
+      
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: ceph-block
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 5Gi
+{% if thanos_chart_state | default('present') == 'present' %}
+    retention: "{{ thanos_prometheus_retention | default('24h') }}"
+    externalLabels:
+      cluster: "{{ k8s_cluster_name }}"
+    remoteWrite:
+      - url: "{{ thanos_receive_remote_write_url }}"
+{% endif %}
+
+    additionalScrapeConfigs:
+    # istiod — ServiceMonitor in 710_istio (do not duplicate here or in kubernetes-pods).
+
+    # Keycloak (keycloakx): management port http-internal, path /auth/metrics.
+    - job_name: keycloak-metrics
+      scrape_interval: 30s
+      metrics_path: /auth/metrics
+      fallback_scrape_protocol: PrometheusText0.0.4
+      kubernetes_sd_configs:
+        - role: endpoints
+          namespaces:
+            names:
+              - {{ keycloak_namespace }}
+      relabel_configs:
+        - source_labels: [__meta_kubernetes_service_name]
+          regex: keycloak-http
+          action: keep
+        - source_labels: [__meta_kubernetes_endpoint_port_name]
+          regex: http-internal
+          action: keep
+        - source_labels: [__meta_kubernetes_namespace]
+          target_label: namespace
+        - source_labels: [__meta_kubernetes_pod_name]
+          target_label: pod
+        - source_labels: [__meta_kubernetes_pod_container_name]
+          target_label: container
+      metric_relabel_configs:
+        - source_labels: [uri]
+          regex: '/auth(/.*)'
+          replacement: '${1}'
+          target_label: uri
+
+    - job_name: 'envoy-stats'
+      metrics_path: /stats/prometheus
+      kubernetes_sd_configs:
+      - role: pod
+      relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_container_port_name]
+        action: keep
+        regex: '.*-envoy-prom'
+
+    - job_name: "blackbox"
+      scrape_interval: 2m
+      metrics_path: /probe
+      params:
+        module: [http_oauth_ok]
+      static_configs:
+{% for ing in k8s_ingress_apps | default([]) %}
+{% if ing.host != blackbox_host %}
+        - targets:
+            - https://{{ ing.host }}
+          labels:
+            module: "{% if ing.ssl_passthrough | default(false) %}http_ssl_passthrough{% else %}http_oauth_ok{% endif %}"
+            Host: "{{ ing.host }}"
+{% endif %}
+{% endfor %}
+      relabel_configs:
+        - source_labels: [module]
+          target_label: __param_module
+        - source_labels: [__address__]
+          target_label: __param_target
+        - source_labels: [__param_target]
+          target_label: instance
+        - target_label: __address__
+          replacement: blackbox-exporter-prometheus-blackbox-exporter.{{ monitoring_namespace }}.svc.{{ k8s_dns_domain }}:9115
+
+    # kubernetes-apiservers / kubernetes-nodes — do not add: duplicates ServiceMonitor
+    # kube-prometheus-stack (apiserver, kubelet/cadvisor/probes).
+
+    # Ad-hoc pod metrics (prometheus.io/*). Platform NS/components — via ServiceMonitor.
+    - job_name: 'kubernetes-pods'
+      honor_labels: true
+      kubernetes_sd_configs:
+      - role: pod
+      relabel_configs:
+      # select only those pods that has "prometheus.io/scrape: true" annotation
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: true
+
+    # support http/https scraping
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scheme]
+        action: replace
+        target_label: __scheme__
+        regex: (https?)
+      # set metrics_path (default is /metrics) to the metrics path specified in "prometheus.io/path: <metric path>" annotation.
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)
+      # set the scrapping port to the port specified in "prometheus.io/port: <port>" annotation and set address accordingly.
+      - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        action: replace
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+        target_label: __address__
+      - action: labelmap
+        regex: __meta_kubernetes_pod_label_(.+)
+      - source_labels: [__meta_kubernetes_namespace]
+        action: replace
+        target_label: kubernetes_namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        action: replace
+        target_label: kubernetes_pod_name
+      # Namespaces with their own ServiceMonitor (calico, rook, …)
+      - source_labels: [__meta_kubernetes_namespace]
+        action: drop
+        regex: ({{ rook_cluster_namespace }}|{{ calico_system_namespace }})
+      # Istio control plane / gateways — SM (istiod, kiali) and job envoy-stats
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        action: drop
+        regex: (istiod|istio-ingressgateway|istio-egressgateway)
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+        action: drop
+        regex: kiali
+
+    - job_name: 'kubernetes-service-endpoints'
+      honor_labels: true
+      kubernetes_sd_configs:
+        - role: endpoints
+      relabel_configs:
+        - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+          action: keep
+          regex: true
+        - source_labels: [__meta_kubernetes_namespace]
+          action: keep
+          regex: ({{ metallb_namespace }}|{{ rook_cluster_namespace }})
+          #kube-system|{{ calico_system_namespace }}|{{ rook_cluster_namespace }}|graylog|{{ kiali_operator_namespace }})
+        - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+          action: replace
+          target_label: __metrics_path__
+          regex: (.+)
+
+        # support http/https scraping
+        - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scheme]
+          action: replace
+          target_label: __scheme__
+          regex: (https?)
+
+        - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
+          action: replace
+          target_label: __address__
+          regex: ([^:]+)(?::\d+)?;(\d+)
+          replacement: $1:$2
+        - action: labelmap
+          regex: __meta_kubernetes_service_label_(.+)
+        - source_labels: [__meta_kubernetes_namespace]
+          action: replace
+          target_label: kubernetes_namespace
+        - source_labels: [__meta_kubernetes_service_name]
+          action: replace
+          target_label: kubernetes_name
+
+    # - job_name: "kubernetes-services"
+    #   kubernetes_sd_configs:
+    #     - role: service
+    #   relabel_configs:
+    #     # Filter services by annotation prometheus.io/scrape=true
+    #     - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+    #       action: keep
+    #       regex: true
+    #     - action: labelmap
+    #       regex: __meta_kubernetes_service_label_(.+)
+    #     - source_labels: [__meta_kubernetes_namespace]
+    #       action: replace
+    #       target_label: namespace
+    #     - source_labels: [__meta_kubernetes_service_name]
+    #       action: replace
+    #       target_label: service
+
+    # - job_name: 'kubernetes-pods'
+    #   kubernetes_sd_configs:
+    #     - role: pod
+    #   relabel_configs:
+    #     - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+    #       action: keep
+    #       regex: true
+    #     - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+    #       action: replace
+    #       target_label: __metrics_path__
+    #       regex: (.+)
+    #     - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+    #       action: replace
+    #       regex: ([^:]+)(?::\d+)?;(\d+)
+    #       replacement: $1:$2
+    #       target_label: __address__
+    #     - action: labelmap
+    #       regex: __meta_kubernetes_pod_label_(.+)
+    #     - source_labels: [__meta_kubernetes_namespace]
+    #       action: replace
+    #       target_label: kubernetes_namespace
+    #     - source_labels: [__meta_kubernetes_pod_name]
+    #       action: replace
+    #       target_label: kubernetes_pod_name

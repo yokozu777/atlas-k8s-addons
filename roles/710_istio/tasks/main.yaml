@@ -1,0 +1,112 @@
+    - name: Remove istio Helm chart (absent)
+      when: istio_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: istio-egressgateway
+            namespace: "{{ istio_namespace }}"
+          - name: istio-ingressgateway
+            namespace: "{{ istio_namespace }}"
+          - name: istiod
+            namespace: "{{ istio_namespace }}"
+          - name: istio-base
+            namespace: "{{ istio_namespace }}"
+        helm_chart_absent_cluster_resources:
+          - api_version: admissionregistration.k8s.io/v1
+            kind: ValidatingWebhookConfiguration
+            name: istiod-default-validator
+        helm_chart_absent_extra_manifests:
+          - "{{ k8s_manifests_dir }}/istio-telemetry.yaml"
+          - "{{ k8s_manifests_dir }}/istiod-servicemonitor.yaml"
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/istio-ingress.yaml"
+          - "{{ k8s_manifests_dir }}/istio-image.yaml"
+          - "{{ k8s_manifests_dir }}/istiod.yaml"
+          - "{{ k8s_manifests_dir }}/istio-egress.yaml"
+          - "{{ k8s_manifests_dir }}/istiod-servicemonitor.yaml"
+          - "{{ k8s_manifests_dir }}/istio-telemetry.yaml"
+    - name: Install/configure istio chart
+      when: istio_chart_state | default('present') == 'present'
+      block:
+        - name: Render istio helm values
+          ansible.builtin.template:
+            src: istio-ingress.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/istio-ingress.yaml"
+            mode: '0644'
+    
+        - name: Render istio image registry values
+          ansible.builtin.template:
+            src: istio-image.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/istio-image.yaml"
+            mode: '0644'
+    
+        - name: Render istiod helm values
+          ansible.builtin.template:
+            src: istiod.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/istiod.yaml"
+            mode: '0644'
+
+        - name: Render istio egress helm values
+          ansible.builtin.template:
+            src: istio-egress.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/istio-egress.yaml"
+            mode: '0644'
+    
+        - name: Helming istio
+          ansible.builtin.command: >-
+            helm upgrade --install {{ item }}
+            --create-namespace
+            {{ istio_chart_version | helm_chart_version_args }}
+          loop:
+            - istio-base istio/base --namespace {{ istio_namespace }} --set defaultRevision=default
+            - istiod istio/istiod --namespace {{ istio_namespace }} -f {{ k8s_manifests_dir }}/istio-image.yaml -f {{ k8s_manifests_dir }}/istiod.yaml
+            - istio-ingressgateway istio/gateway --namespace {{ istio_namespace }} -f {{ k8s_manifests_dir }}/istio-image.yaml -f {{ k8s_manifests_dir }}/istio-ingress.yaml
+            - istio-egressgateway istio/gateway --namespace {{ istio_namespace }} -f {{ k8s_manifests_dir }}/istio-image.yaml -f {{ k8s_manifests_dir }}/istio-egress.yaml
+
+        - name: Wait for Istio Telemetry CRD
+          ansible.builtin.command: >-
+            kubectl wait --for=condition=established
+            crd/telemetries.telemetry.istio.io --timeout=120s
+          register: wait_istio_telemetry_crd
+          until: wait_istio_telemetry_crd.rc == 0
+          retries: 10
+          delay: 6
+          changed_when: false
+
+        - name: Wait for istiod deployment
+          ansible.builtin.command: >-
+            kubectl wait deployment istiod
+            --namespace {{ istio_namespace }}
+            --for=condition=Available
+            --timeout=300s
+          register: wait_istiod
+          until: wait_istiod.rc == 0
+          retries: 30
+          delay: 10
+          changed_when: false
+
+        - name: Render mesh-wide Istio Telemetry
+          ansible.builtin.template:
+            src: istio-telemetry.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/istio-telemetry.yaml"
+            mode: '0644'
+
+        - name: Apply mesh-wide Istio Telemetry
+          ansible.builtin.command: >-
+            kubectl --validate=false apply
+            -f {{ k8s_manifests_dir }}/istio-telemetry.yaml
+          register: apply_istio_telemetry
+          until: apply_istio_telemetry.rc == 0
+          retries: 30
+          delay: 10
+
+        - name: Render istiod ServiceMonitor
+          ansible.builtin.template:
+            src: istiod-servicemonitor.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/istiod-servicemonitor.yaml"
+            mode: '0644'
+
+        - name: Apply istiod ServiceMonitor
+          ansible.builtin.command: >-
+            kubectl --validate=false apply
+            -f {{ k8s_manifests_dir }}/istiod-servicemonitor.yaml

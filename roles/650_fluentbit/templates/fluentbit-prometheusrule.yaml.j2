@@ -1,0 +1,32 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: fluent-bit
+  namespace: {{ logging_namespace }}
+  labels:
+    app.kubernetes.io/name: fluent-bit
+spec:
+  groups:
+    - name: fluent-bit
+      rules:
+        - alert: FluentbitEsOutputRetries
+          expr: increase(fluentbit_output_retries_total[15m]) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Fluent Bit Elasticsearch output is retrying
+            description: >-
+              Fluent Bit on {{ '{{ $labels.instance }}' }} has retried ES output
+              for 15m ({{ '{{ $value }}' }} retries in the window).
+        - alert: FluentbitDroppedRecords
+          expr: increase(fluentbit_output_dropped_records_total[15m]) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Fluent Bit is dropping records
+            description: >-
+              Fluent Bit on {{ '{{ $labels.instance }}' }} dropped records for 15m
+              ({{ '{{ $value }}' }} in the window).

@@ -1,0 +1,91 @@
+---
+- name: Assert lab CA URL is set for kube-apiserver OIDC
+  ansible.builtin.assert:
+    that:
+      - pki_ca_url | default('') | length > 0
+    fail_msg: kube_apiserver_oidc_enabled requires pki_ca_url (lab root CA).
+
+- name: Resolve lab CA URL list
+  ansible.builtin.set_fact:
+    kube_oidc_ca_url_list: "{{ [pki_ca_url] if pki_ca_url is string else (pki_ca_url | list) }}"
+
+- name: Ensure Kubernetes PKI directory exists
+  ansible.builtin.file:
+    path: "{{ kube_oidc_ca_file | dirname }}"
+    state: directory
+    mode: "0755"
+
+- name: Ensure OIDC CA staging directory exists
+  ansible.builtin.file:
+    path: "{{ kube_oidc_ca_file | dirname }}/oidc-ca-src"
+    state: directory
+    mode: "0700"
+
+- name: Download lab root CA for kube-apiserver OIDC
+  ansible.builtin.get_url:
+    url: "{{ item }}"
+    dest: "{{ kube_oidc_ca_file | dirname }}/oidc-ca-src/{{ idx }}.crt"
+    mode: "0644"
+    validate_certs: false
+    force: true
+  loop: "{{ kube_oidc_ca_url_list }}"
+  loop_control:
+    index_var: idx
+    label: "{{ item }}"
+  register: kube_oidc_ca_gets
+  failed_when: false
+
+- name: Evaluate lab CA download
+  ansible.builtin.set_fact:
+    kube_oidc_ca_download_ok: >-
+      {%- set ns = namespace(ok=true) -%}
+      {%- set rows = kube_oidc_ca_gets.results | default([]) -%}
+      {%- if rows | length == 0 -%}
+      {%- set ns.ok = false -%}
+      {%- endif -%}
+      {%- for item in rows -%}
+      {%- if (item.status_code | default(0) | int) != 200 -%}
+      {%- set ns.ok = false -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ ns.ok }}
+
+- name: Stat cached kube-apiserver OIDC CA bundle
+  ansible.builtin.stat:
+    path: "{{ kube_oidc_ca_file }}"
+  register: kube_oidc_ca_dest
+  when: not (kube_oidc_ca_download_ok | bool)
+
+- name: Fail if lab CA download failed and no cached bundle
+  ansible.builtin.assert:
+    that:
+      - kube_oidc_ca_dest.stat.exists | default(false)
+    fail_msg: >-
+      Failed to download pki_ca_url and {{ kube_oidc_ca_file }} is missing.
+  when: not (kube_oidc_ca_download_ok | bool)
+
+- name: List OIDC CA staging files
+  ansible.builtin.find:
+    paths: "{{ kube_oidc_ca_file | dirname }}/oidc-ca-src"
+    patterns: "*.crt"
+    file_type: file
+  register: kube_oidc_ca_staging
+  when: kube_oidc_ca_download_ok | bool
+
+- name: Remove stale OIDC CA staging files
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ kube_oidc_ca_staging.files | default([]) }}"
+  when:
+    - kube_oidc_ca_download_ok | bool
+    - (item.path | basename | regex_search('^[0-9]+\\.crt$') | default('')) | length > 0
+    - (item.path | basename | regex_replace('\\.crt$', '') | int) >= (kube_oidc_ca_url_list | length)
+
+- name: Assemble kube-apiserver OIDC CA bundle
+  ansible.builtin.assemble:
+    src: "{{ kube_oidc_ca_file | dirname }}/oidc-ca-src"
+    dest: "{{ kube_oidc_ca_file }}"
+    mode: "0644"
+  register: kube_oidc_ca_assemble
+  when: kube_oidc_ca_download_ok | bool

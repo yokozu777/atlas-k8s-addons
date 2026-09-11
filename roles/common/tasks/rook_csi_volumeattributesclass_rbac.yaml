@@ -1,0 +1,15 @@
+- name: Render Rook CSI VolumeAttributesClass RBAC manifest
+  ansible.builtin.template:
+    src: "{{ role_path }}/../common/templates/rook-csi-volumeattributesclass-rbac.yaml.j2"
+    dest: "{{ k8s_manifests_dir }}/rook-csi-volumeattributesclass-rbac.yaml"
+    mode: '0644'
+
+- name: Apply Rook CSI VolumeAttributesClass RBAC
+  ansible.builtin.command: >-
+    kubectl --validate=false apply -f {{ k8s_manifests_dir }}/rook-csi-volumeattributesclass-rbac.yaml
+  environment:
+    KUBECONFIG: "{{ k8s_kubeconfig }}"
+  register: rook_csi_vac_rbac_apply
+  changed_when: >-
+    'created' in rook_csi_vac_rbac_apply.stdout
+    or 'configured' in rook_csi_vac_rbac_apply.stdout

@@ -1,0 +1,12 @@
+---
+- name: Assert Calico cluster network variables are set
+  ansible.builtin.assert:
+    that:
+      - pod_subnet | default('') | length > 0
+      - vip_address | default('') | length > 0
+      - k8s_api_port | default(0) | int > 0
+      - calico_chart_version | default('') | length > 0
+      - helm_version | default('') | length > 0
+    fail_msg: >-
+      Calico / helm bootstrap variables missing — check group_vars/all/atlas-k8s-addons.yml
+      (pod_subnet, vip_address, k8s_api_port, calico_chart_version, helm_version)

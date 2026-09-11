@@ -1,0 +1,6 @@
+---
+# Operator catalog: group_vars/all/atlas-k8s-addons.yml (deep knobs in role tasks/templates).
+vault_unseal_keys_remote: /root/vault-init-keys.txt
+vault_admin: vault-admin
+eso_service_account: external-secrets
+k8s_master_hosts: k8s_masters

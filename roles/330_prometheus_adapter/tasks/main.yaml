@@ -1,0 +1,25 @@
+    - name: Remove prometheus-adapter Helm chart (absent)
+      when: prometheus_adapter_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: prometheus-adapter
+            namespace: "{{ monitoring_namespace }}"
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/prometheus-adapter.yaml"
+    - name: Install/configure prometheus_adapter chart
+      when: prometheus_adapter_chart_state | default('present') == 'present'
+      block:
+        - name: Render prometheus-adapter helm values
+          ansible.builtin.template:
+            src: prometheus-adapter.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/prometheus-adapter.yaml"
+            mode: '0644'
+    
+        - name: Helming prometheus-adapter
+          ansible.builtin.command: >-
+            helm upgrade --install {{ item }}
+            --create-namespace
+            {{ prometheus_adapter_chart_version | helm_chart_version_args }}
+          loop:
+            - prometheus-adapter prometheus-community/prometheus-adapter --namespace {{ monitoring_namespace }} -f {{ k8s_manifests_dir }}/prometheus-adapter.yaml

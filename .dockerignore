@@ -1,0 +1,45 @@
+# VCS / IDE
+.git/
+.gitignore
+*.code-workspace
+.vscode/
+.idea/
+
+# Local runtime / secrets (never bake into image)
+inventory.yml
+hosts
+pub_keys/
+workspace/
+.ansible/
+.ansible_facts_cache/
+*.retry
+vars-file.yml
+ansible_local_execute.cfg
+secrets.yml
+**/secrets.yml
+# Role task files named secrets.yml are code (validate gates), not credentials.
+!roles/**/tasks/secrets.yml
+*.vault
+**/vault.yml
+kubeconfig*
+**/kubeconfig*
+!roles/**/templates/kubeconfig*.j2
+host_vars/*
+!host_vars/example.yml
+!host_vars/*.example.yml
+
+# Python caches / venvs
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/venv/
+**/.venv/
+
+# Logs / temp / OS
+*.log
+logs/
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+.cache/

@@ -1,0 +1,19 @@
+---
+# Operator catalog: group_vars/all/atlas-k8s-addons.yml (deep knobs in role tasks/templates).
+# Rook storage node list is loaded from provision_hosts_file (see examples/provision_hosts.example.yml).
+provision_hosts_file: "{{ playbook_dir }}/../examples/provision_hosts.example.yml"
+provision_rook_database_size_mb: "1024"
+provision_rook_data_disk_index: 1
+provision_rook_wwn_path_prefix: "/dev/disk/by-id/wwn-"
+# CephCluster.spec.cephConfig.global; "" omits the key (Ceph default 250).
+rook_mon_max_pg_per_osd: "500"
+
+# In-cluster HTTPS for RGW. minio-go (Thanos) uses STREAMING-AWS4 PutObject on
+# plain HTTP; Ceph RGW rejects that as anonymous 403. TLS makes minio skip streaming.
+rook_objectstore_name: ceph-objectstore
+rook_rgw_https_secret: rook-ceph-rgw-tls
+rook_rgw_secure_port: 443
+rook_rgw_service: "rook-ceph-rgw-{{ rook_objectstore_name }}"
+rook_rgw_tls_cn: "{{ rook_rgw_service }}.{{ rook_cluster_namespace }}.svc"
+rook_rgw_tls_san: >-
+  DNS:{{ rook_rgw_service }},DNS:{{ rook_rgw_service }}.{{ rook_cluster_namespace }},DNS:{{ rook_rgw_service }}.{{ rook_cluster_namespace }}.svc,DNS:{{ rook_rgw_service }}.{{ rook_cluster_namespace }}.svc.{{ k8s_dns_domain }}

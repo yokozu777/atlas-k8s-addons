@@ -1,0 +1,16 @@
+---
+# Operator catalog: group_vars/all/atlas-k8s-addons.yml
+# Loaded by 130_validate_vars when kube_apiserver_oidc_enabled (clusterctl leaf
+# overlay does not copy these keys into extra-vars).
+k8s_master_hosts: k8s_masters
+k8s_kubeadm_admin_kubeconfig: /etc/kubernetes/admin.conf
+
+kube_apiserver_oidc_enabled: false
+kube_oidc_client_id: kubernetes
+kube_oidc_username_claim: preferred_username
+kube_oidc_username_prefix: "-"
+kube_oidc_groups_claim: groups
+kube_oidc_ca_file: /etc/kubernetes/pki/oidc-ca.crt
+kube_oidc_issuer_url: "{{ oidc_issuer_url | default('') }}"
+kube_oidc_kubeadm_config: /etc/kubernetes/kubeadm-oidc.yaml
+kube_oidc_apiserver_manifest: /etc/kubernetes/manifests/kube-apiserver.yaml

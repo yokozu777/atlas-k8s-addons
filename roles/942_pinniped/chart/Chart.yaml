@@ -1,0 +1,8 @@
+apiVersion: v2
+name: pinniped
+description: >
+  Thin chart wrapping official Pinniped Supervisor+Concierge manifests
+  (get.pinniped.dev, not Bitnami) plus Atlas Keycloak CRs.
+type: application
+version: 0.1.0
+appVersion: v0.47.0

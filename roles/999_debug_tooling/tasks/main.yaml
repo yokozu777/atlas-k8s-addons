@@ -1,0 +1,37 @@
+---
+- name: Resolve debug tooling install targets
+  ansible.builtin.import_tasks: resolve_targets.yaml
+
+- name: Prepare controller kubeconfig for debug tooling distribution
+  ansible.builtin.import_tasks: prepare_kubeconfig.yaml
+  when: debug_tooling_install_kubeconfig | default('') | length > 0
+
+- name: Install kubeconfig for node-side debugging
+  when:
+    - debug_tooling_install_kubeconfig | default('') | length > 0
+    - inventory_hostname in debug_tooling_kubeconfig_target_hosts
+  ansible.builtin.include_tasks: install_kubeconfig.yaml
+
+- name: Install helm for node-side debugging
+  when:
+    - debug_tooling_helm_enabled | default(false) | bool
+    - inventory_hostname in debug_tooling_helm_target_hosts
+  ansible.builtin.include_tasks: install_helm.yaml
+
+- name: Install calicoctl for node-side debugging
+  when:
+    - debug_tooling_calicoctl_enabled | default(true) | bool
+    - inventory_hostname in debug_tooling_calicoctl_target_hosts
+  ansible.builtin.include_tasks: install_calicoctl.yaml
+
+- name: Install istioctl for node-side debugging
+  when:
+    - debug_tooling_istioctl_enabled | default(true) | bool
+    - inventory_hostname in debug_tooling_istioctl_target_hosts
+  ansible.builtin.include_tasks: install_istioctl.yaml
+
+- name: Install etcdctl for node-side debugging
+  when:
+    - debug_tooling_etcdctl_enabled | default(true) | bool
+    - inventory_hostname in debug_tooling_etcdctl_target_hosts
+  ansible.builtin.include_tasks: install_etcdctl.yaml

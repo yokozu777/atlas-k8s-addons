@@ -1,0 +1,26 @@
+---
+prometheus_etcd_client_cert_secret_name: etcd-client-cert
+prometheus_etcd_client_cert_staging_dir: "{{ controller_secrets_dir }}/etcd"
+prometheus_etcd_client_cert_fetch_script: "{{ k8s_control_plane_scripts_dir }}/fetch-etcd-client-certs.sh"
+prometheus_etcd_client_cert_remote_files:
+  - remote: /etc/kubernetes/pki/etcd/ca.crt
+    local: ca.crt
+    mode: '0644'
+  - remote: /etc/kubernetes/pki/etcd/healthcheck-client.crt
+    local: healthcheck-client.crt
+    mode: '0644'
+  - remote: /etc/kubernetes/pki/etcd/healthcheck-client.key
+    local: healthcheck-client.key
+    mode: '0600'
+
+# Official Calico Grafana ConfigMap (Felix+Typha). Typha JSON is extracted at apply;
+# Felix stays on grafana.com gnet 12175 (same dashboard uid).
+# Origin follows grafana_dashboard_source.calico_typha (github | infra).
+calico_grafana_dashboards_manifest_url: >-
+  {{
+    (
+      grafana_dashboard_infra_base | regex_replace('/+$', '')
+      if ((grafana_dashboard_source | default({}))['calico_typha'] | default('github')) == 'infra'
+      else 'https://raw.githubusercontent.com'
+    )
+  }}/projectcalico/calico/{{ calico_chart_version }}/manifests/grafana-dashboards.yaml

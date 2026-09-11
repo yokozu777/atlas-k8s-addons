@@ -1,0 +1,45 @@
+---
+- name: Assert use_internal_helm_repo is valid
+  ansible.builtin.assert:
+    that:
+      - use_internal_helm_repo | default('nexus') in ['none', 'nexus', 'nginx']
+    fail_msg: >-
+      use_internal_helm_repo must be one of: none, nexus, nginx
+      (got {{ use_internal_helm_repo | default('nexus') }})
+
+- name: Assert helm nginx flags match use_internal_helm_repo
+  ansible.builtin.assert:
+    that:
+      - (setup_helm_nginx | default(false) | bool) == ((use_internal_helm_repo == 'nginx') and (setup_helm_repo_nginx | default(false) | bool))
+    fail_msg: >-
+      setup_helm_nginx must equal
+      (use_internal_helm_repo == 'nginx' and setup_helm_repo_nginx=true); do not override manually in group_vars/all/atlas-k8s-addons.yml
+
+- name: Assert setup_helm_repo_nginx when Helm client mode is nginx
+  ansible.builtin.assert:
+    that:
+      - setup_helm_repo_nginx | default(false) | bool
+    fail_msg: use_internal_helm_repo=nginx requires setup_helm_repo_nginx=true
+  when: use_internal_helm_repo | default('nexus') == 'nginx'
+
+- name: Assert nexus variables when Helm repo mode is nexus
+  ansible.builtin.assert:
+    that:
+      - nexus_base_url | default('') | length > 0
+      - nexus_host | default('') | length > 0
+    fail_msg: nexus_base_url and nexus_host are required when use_internal_helm_repo=nexus
+  when: use_internal_helm_repo | default('nexus') == 'nexus'
+
+- name: Assert nginx Helm repo variables when mode is nginx
+  ansible.builtin.assert:
+    that:
+      - helm_repo_nginx_ingress_domain | default('') | length > 0
+      - helm_repo_upstreams | default([]) | length > 0
+      - setup_stepca | default(false) | bool
+      - helm_repo_tls_enabled | default(false) | bool
+    fail_msg: >-
+      helm_repo_nginx_ingress_domain, helm_repo_upstreams, setup_stepca=true and
+      helm_repo_tls_enabled=true are required when use_internal_helm_repo=nginx and setup_helm_repo_nginx=true
+  when:
+    - use_internal_helm_repo | default('nexus') == 'nginx'
+    - setup_helm_repo_nginx | default(false) | bool

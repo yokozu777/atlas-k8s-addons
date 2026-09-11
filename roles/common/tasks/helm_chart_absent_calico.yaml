@@ -1,0 +1,43 @@
+---
+- name: Remove Calico / Tigera Helm chart (absent)
+  ansible.builtin.include_tasks: helm_chart_absent.yaml
+  vars:
+    helm_chart_absent_releases:
+      - name: tigera-operator
+        namespace: "{{ calico_operator_namespace }}"
+    helm_chart_absent_delete_namespace: true
+    helm_chart_absent_namespaces:
+      - "{{ calico_operator_namespace }}"
+      - "{{ calico_system_namespace }}"
+    helm_chart_absent_cluster_resources:
+      - api_version: admissionregistration.k8s.io/v1
+        kind: MutatingWebhookConfiguration
+        name: api.projectcalico.org
+      - api_version: admissionregistration.k8s.io/v1
+        kind: ValidatingWebhookConfiguration
+        name: api.projectcalico.org
+    helm_chart_absent_crd_patterns:
+      - projectcalico.org
+      - tigera.io
+    helm_chart_absent_local_files:
+      - "{{ k8s_manifests_dir }}/calico.yaml"
+      - "{{ k8s_manifests_dir }}/.calico-crds-version"
+      - "{{ k8s_manifests_dir }}/.calico-installation-values-checksum"
+
+- name: Delete remaining resources in {{ calico_system_namespace }} namespace
+  ansible.builtin.command: kubectl delete all,sts,job,pvc,cm,secret,sa,role,rolebinding,networkpolicy --all -n {{ calico_system_namespace }} --ignore-not-found --wait=false
+  environment:
+    KUBECONFIG: "{{ k8s_kubeconfig }}"
+  changed_when: false
+  failed_when: false
+
+- name: Delete {{ calico_system_namespace }} namespace after workload cleanup
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Namespace
+    name: "{{ calico_system_namespace }}"
+    wait: true
+    wait_timeout: 600
+  environment:
+    KUBECONFIG: "{{ k8s_kubeconfig }}"

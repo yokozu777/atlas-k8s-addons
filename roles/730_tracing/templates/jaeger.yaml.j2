@@ -1,0 +1,131 @@
+fullnameOverride: jaeger
+
+uiconfig:
+  dependencies:
+    dagMaxNumServices: 200
+    menuEnabled: true
+  monitor:
+    menuEnabled: true
+  archiveEnabled: false
+
+userconfig:
+  service:
+    extensions: [jaeger_storage, jaeger_query, healthcheckv2]
+    pipelines:
+      traces:
+        receivers: [otlp]
+        processors: [batch]
+        exporters: [jaeger_storage_exporter]
+    telemetry:
+      resource:
+        service.name: jaeger
+      metrics:
+        level: detailed
+        readers:
+          - pull:
+              exporter:
+                prometheus:
+                  host: 0.0.0.0
+                  port: 8888
+  extensions:
+    healthcheckv2:
+      use_v2: true
+      http:
+        endpoint: 0.0.0.0:13133
+    jaeger_query:
+      storage:
+        traces: primary_store
+        metrics: spanmetrics
+      grpc:
+        endpoint: 0.0.0.0:16685
+      http:
+        endpoint: 0.0.0.0:16686
+      ui:
+        config_file: /etc/jaeger/ui-config.json
+    jaeger_storage:
+      backends:
+        primary_store:
+          elasticsearch:
+            server_urls:
+              - "https://elasticsearch-master.{{ logging_namespace }}.svc.{{ k8s_dns_domain }}:9200"
+            version: 9
+            auth:
+              basic:
+                username: "{{ k8s_users.elastic_jaeger }}"
+                password: "{{ k8s_secrets.elastic_jaeger_password }}"
+            tls:
+              insecure_skip_verify: true
+            sniffing:
+              enabled: false
+            indices:
+              spans:
+                shards: 1
+                replicas: 0
+              services:
+                shards: 1
+                replicas: 0
+              dependencies:
+                shards: 1
+                replicas: 0
+              sampling:
+                shards: 1
+                replicas: 0
+      metric_backends:
+        spanmetrics:
+          prometheus:
+            endpoint: "http://prometheus-kube-prometheus-prometheus.{{ monitoring_namespace }}.svc.{{ k8s_dns_domain }}:9090"
+            normalize_calls: true
+            normalize_duration: true
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+  processors:
+    batch: {}
+  exporters:
+    jaeger_storage_exporter:
+      trace_storage: primary_store
+
+jaeger:
+  enabled: true
+  replicas: 1
+  # Chart default is scrape:true — job kubernetes-pods would duplicate ServiceMonitor.
+  podAnnotations:
+    prometheus.io/scrape: "false"
+  ingress:
+    enabled: false
+
+storage:
+  type: elasticsearch
+  elasticsearch:
+    url: "https://elasticsearch-master.{{ logging_namespace }}.svc.{{ k8s_dns_domain }}:9200"
+    user: "{{ k8s_users.elastic_jaeger }}"
+    password: "{{ k8s_secrets.elastic_jaeger_password }}"
+    tls:
+      enabled: true
+      insecure: true
+
+spark:
+  enabled: true
+  image:
+    registry: ghcr.io
+    repository: jaegertracing/spark-dependencies/spark-dependencies
+    tag: elasticsearch9
+  extraEnv:
+    - name: ES_NODES_WAN_ONLY
+      value: "true"
+    - name: ES_USE_ALIASES
+      value: "false"
+
+esIndexCleaner:
+  enabled: true
+  numberOfDays: 7
+
+esRollover:
+  enabled: false
+
+esLookback:
+  enabled: false

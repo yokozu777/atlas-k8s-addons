@@ -1,0 +1,45 @@
+---
+# Per-repo add --force-update already fetches the index. Do not also run
+# `helm repo update` (that doubled HTTP timeouts on a dead upstream).
+# Stale HELM_REPOSITORY_CACHE index is enough to continue; greenfield
+# without an index is fatal.
+- name: Helm add repo {{ helm_repo.name }}
+  ansible.builtin.command:
+    cmd: >-
+      helm repo add --force-update {{ helm_repo.name }}
+      {{ helm_repo.name | helm_repo_client_url(
+           use_internal_helm_repo,
+           nexus_base_url,
+           helm_repo_nginx_ingress_domain,
+           helm_repo_upstreams) }}
+  environment: "{{ _helm_client_env }}"
+  register: helm_repo_add
+  retries: "{{ helm_repo_update_retries | int }}"
+  delay: "{{ helm_repo_update_delay | int }}"
+  until: helm_repo_add.rc == 0
+  failed_when: false
+  changed_when: false
+
+- name: Stat Helm index cache for {{ helm_repo.name }}
+  ansible.builtin.stat:
+    path: "{{ controller_helm_cache_dir }}/repository/{{ helm_repo.name }}-index.yaml"
+  register: helm_repo_index
+
+- name: Warn when using stale Helm index for {{ helm_repo.name }}
+  ansible.builtin.debug:
+    msg: >-
+      Helm repo {{ helm_repo.name }} add failed; using stale index
+      {{ controller_helm_cache_dir }}/repository/{{ helm_repo.name }}-index.yaml
+  when:
+    - helm_repo_add.rc | default(1) | int != 0
+    - helm_repo_index.stat.exists | default(false) | bool
+
+- name: Assert Helm index exists for {{ helm_repo.name }}
+  ansible.builtin.assert:
+    that:
+      - helm_repo_index.stat.exists | default(false) | bool
+    fail_msg: >-
+      Helm repo {{ helm_repo.name }} has no cached index at
+      {{ controller_helm_cache_dir }}/repository/{{ helm_repo.name }}-index.yaml
+      after add failures. Greenfield cannot continue without an index.
+  when: helm_repo_add.rc | default(1) | int != 0

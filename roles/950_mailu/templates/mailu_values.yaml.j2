@@ -1,0 +1,133 @@
+fullnameOverride: mailu
+
+hostnames:
+  - {{ mailu_host }}
+  - {{ mailu_mx_host }}
+
+domain: "{{ mailu_domain }}"
+clusterDomain: "{{ k8s_dns_domain }}"
+subnet: "{{ pod_subnet }}"
+existingSecret: "{{ mailu_secret_name }}"
+
+initialAccount:
+  enabled: true
+  username: "{{ mailu_initial_username }}"
+  domain: "{{ mailu_domain }}"
+  existingSecret: "{{ mailu_secret_name }}"
+  existingSecretPasswordKey: initial-account-password
+  mode: ifmissing
+
+persistence:
+  single_pvc: true
+  size: 20Gi
+  storageClass: ceph-filesystem
+  accessModes: [ReadWriteMany]
+  claimNameOverride: mailu-storage
+
+ingress:
+  enabled: false
+  tls: true
+  existingSecret: "{{ mailu_https_secret }}"
+  tlsFlavorOverride: mail
+  realIpHeader: X-Forwarded-For
+  realIpFrom: "{{ pod_subnet }}"
+
+proxyAuth:
+  whitelist: "{{ pod_subnet }}"
+  header: X-Auth-Request-Email
+  create: "true"
+
+# Roundcube IMAP uses Mailu webmail token-*; verify_temp_token loads the Flask
+# session. Chart default sessionTimeout 3600 drops Redis session after 1h idle
+# (auth_request does not refresh TTL) while Roundcube cookies last longer →
+# empty INBOX / imap-login auth failed. Align idle TTL with max lifetime.
+sessionTimeout: "2592000"
+permanentSessionLifetime: 2592000
+
+networkPolicy:
+  enabled: false
+  ingressController:
+    namespace: "{{ envoy_gateway_namespace }}"
+    podSelector: |
+      matchLabels:
+        gateway.envoyproxy.io/owning-gateway-name: {{ envoy_gateway_gateway_name }}
+
+front:
+  hostPort:
+    enabled: false
+  externalService:
+    enabled: true
+    type: LoadBalancer
+    externalTrafficPolicy: Local
+{% if mailu_lb_ip | default('') | length > 0 %}
+    loadBalancerIP: "{{ mailu_lb_ip }}"
+{% endif %}
+    annotations:
+      external-dns.alpha.kubernetes.io/hostname: {{ mailu_mx_host }}
+    ports:
+      pop3: false
+      pop3s: true
+      imap: false
+      imaps: true
+      smtp: true
+      smtps: true
+      submission: true
+      manageSieve: true
+
+redis:
+  enabled: true
+  auth:
+    enabled: false
+  master:
+    persistence:
+      existingClaim: mailu-storage
+      subPath: redis
+
+# start.py requires DNSSEC AD on every nameserver (CoreDNS has none).
+# mailu-unbound validates the internet and forwards {{ k8s_dns_domain }} to CoreDNS.
+# Pinned ClusterIP: admin cannot use cluster DNS to find the resolver itself.
+admin:
+  dnsPolicy: "None"
+  dnsConfig:
+    nameservers:
+      - "{{ mailu_unbound_cluster_ip }}"
+    searches:
+      - "{{ mailu_namespace }}.svc.{{ k8s_dns_domain }}"
+      - "svc.{{ k8s_dns_domain }}"
+      - "{{ k8s_dns_domain }}"
+    options:
+      - name: ndots
+        value: "1"
+  # sqlite on CephFS RWX: /ping can exceed 1s while IMAP/SSO hits admin; default
+  # probe timeout then SIGKILL → Envoy "upstream request timeout" on sso.php.
+  livenessProbe:
+    timeoutSeconds: 5
+    failureThreshold: 6
+  readinessProbe:
+    timeoutSeconds: 5
+    failureThreshold: 6
+  # start.py runs flask db upgrade then gunicorn via os.system (ignores rc).
+  # If Redis is not reachable yet, sqlite stays empty, /ping is still 200, and
+  # rspamd loops on /internal/rspamd/local_domains until the startup probe kills it.
+  # dnsPolicy None: wait Unbound on the pinned ClusterIP, then Redis via cluster DNS.
+  initContainers:
+    - name: wait-redis
+      image: busybox:1.36
+      imagePullPolicy: IfNotPresent
+      command:
+        - /bin/sh
+        - -c
+        - |
+          unbound="{{ mailu_unbound_cluster_ip }}"
+          redis="mailu-redis-master.{{ mailu_namespace }}.svc.{{ k8s_dns_domain }}"
+          echo "waiting for unbound ${unbound}:53"
+          until nc -z -w 2 "${unbound}" 53; do sleep 2; done
+          echo "waiting for redis ${redis}:6379"
+          until nc -z -w 2 "${redis}" 6379; do sleep 2; done
+
+webmail:
+  enabled: true
+  type: roundcube
+
+clamav:
+  enabled: {{ mailu_clamav_enabled | bool | to_json }}

@@ -1,0 +1,22 @@
+---
+- name: Stat controller unseal keys before distribute
+  when: vault_chart_state | default('present') == 'present'
+  ansible.builtin.stat:
+    path: "{{ k8s_manifests_dir }}/vault-init-keys.txt"
+  register: vault_keys_local_stat
+  run_once: true
+  delegate_to: "{{ k8s_cluster_fact_host }}"
+  connection: local
+  become: false
+
+- name: "keys_distribute: copy unseal keys to this master"
+  ansible.builtin.copy:
+    src: "{{ k8s_manifests_dir }}/vault-init-keys.txt"
+    dest: "{{ vault_unseal_keys_remote }}"
+    mode: '0600'
+    owner: root
+    group: root
+  when:
+    - vault_chart_state | default('present') == 'present'
+    - hostvars[ansible_play_hosts[0]].vault_keys_local_stat.stat.exists | default(false)
+    - hostvars[ansible_play_hosts[0]].vault_keys_local_stat.stat.size | default(0) | int > 0

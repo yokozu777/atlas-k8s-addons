@@ -1,0 +1,13 @@
+installation:
+  cni:
+    type: Calico
+  calicoNetwork:
+    linuxDataplane: {{ calico_linux_dataplane | default('BPF') }}
+    bgp: {{ calico_bgp | default('Disabled') }}
+    ipPools:
+    - cidr: {{ pod_subnet }}
+      encapsulation: {{ calico_ip_pool_encapsulation | default('VXLANCrossSubnet') }}
+      #natOutgoing: Disabled
+kubernetesServiceEndpoint:
+  host: "{{ vip_address }}"
+  port: "{{ k8s_api_port }}"

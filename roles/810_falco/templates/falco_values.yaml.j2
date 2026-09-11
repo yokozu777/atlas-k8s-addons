@@ -1,0 +1,18 @@
+tty: true
+
+falco:
+  json_output: true
+  json_include_output_property: true
+
+metrics:
+  enabled: true
+  interval: 15m
+  serviceMonitor:
+    create: false
+
+falcosidekick:
+  enabled: true
+  webui:
+    enabled: true
+    ingress:
+      enabled: false

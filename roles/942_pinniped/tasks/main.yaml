@@ -1,0 +1,241 @@
+---
+- name: Ensure controller kubeconfig before Pinniped
+  ansible.builtin.import_role:
+    name: 140_fetch_kubeconfig
+
+- name: Remove Pinniped Helm chart (absent)
+  when: pinniped_chart_state | default('present') == 'absent'
+  ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+  vars:
+    helm_chart_absent_releases:
+      - name: pinniped
+        namespace: "{{ pinniped_namespace }}"
+    helm_chart_absent_delete_namespace: true
+    helm_chart_absent_namespaces:
+      - "{{ pinniped_namespace }}"
+    helm_chart_absent_ingress_app_names:
+      - pinniped-supervisor
+      - pinniped-login
+    helm_chart_absent_crd_patterns:
+      - pinniped.dev
+    helm_chart_absent_cluster_resources:
+      - api_version: apiregistration.k8s.io/v1
+        kind: APIService
+        name: v1alpha1.clientsecret.supervisor.pinniped.dev
+      - api_version: apiregistration.k8s.io/v1
+        kind: APIService
+        name: v1alpha1.login.concierge.pinniped.dev
+      - api_version: apiregistration.k8s.io/v1
+        kind: APIService
+        name: v1alpha1.identity.concierge.pinniped.dev
+    helm_chart_absent_local_files:
+      - "{{ k8s_manifests_dir }}/pinniped_values.yaml"
+      - "{{ pinniped_kubeconfig }}"
+
+- name: Install/configure Pinniped Supervisor and Concierge
+  when: pinniped_chart_state | default('present') == 'present'
+  block:
+    - name: Require Keycloak when Pinniped is present
+      ansible.builtin.assert:
+        that:
+          - keycloak_chart_state | default('present') == 'present'
+          - oidc_issuer_url | default('') | length > 0
+          - k8s_secrets.pinniped_supervisor_client_secret | default('') | length > 0
+        fail_msg: >-
+          pinniped requires keycloak_chart_state=present, oidc_issuer_url,
+          and k8s_secrets.pinniped_supervisor_client_secret
+
+    - name: Slurp lab root CA for Pinniped TLS (Keycloak and Supervisor)
+      ansible.builtin.slurp:
+        src: "{{ controller_ca_cert_path }}"
+      register: pinniped_lab_ca
+
+    - name: Set Pinniped CA bundle
+      ansible.builtin.set_fact:
+        pinniped_ca_bundle_b64: "{{ pinniped_lab_ca.content }}"
+
+    - name: Render Pinniped helm values
+      ansible.builtin.template:
+        src: values.yaml.j2
+        dest: "{{ k8s_manifests_dir }}/pinniped_values.yaml"
+        mode: "0600"
+      no_log: true
+
+    - name: Ensure Pinniped namespace
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ pinniped_namespace }}"
+        state: present
+
+    - name: Lookup Pinniped login kubeconfig Secret
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "{{ pinniped_login_kubeconfig_secret }}"
+        namespace: "{{ pinniped_namespace }}"
+      register: pinniped_login_secret_info
+
+    - name: Create Pinniped login kubeconfig Secret placeholder
+      when: pinniped_login_secret_info.resources | default([]) | length == 0
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ pinniped_login_kubeconfig_secret }}"
+            namespace: "{{ pinniped_namespace }}"
+          type: Opaque
+          stringData:
+            kubeconfig: "# pending\n"
+
+    - name: Helming Pinniped
+      ansible.builtin.command: >-
+        helm upgrade --install pinniped {{ role_path }}/chart
+        --namespace {{ pinniped_namespace }} --create-namespace
+        -f {{ k8s_manifests_dir }}/pinniped_values.yaml
+        --wait --timeout=10m
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig | default(controller_kubeconfig) }}"
+      register: helm_pinniped
+      retries: 5
+      delay: 15
+      until: helm_pinniped.rc == 0
+      changed_when: >-
+        'has been upgraded' in helm_pinniped.stdout
+        or 'has been installed' in helm_pinniped.stdout
+
+    - name: Apply OIDC k8s-admins ClusterRoleBinding
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_kubeconfig | default(controller_kubeconfig) }}"
+        state: present
+        definition: "{{ lookup('ansible.builtin.template', 'pinniped-k8s-admins.yaml.j2') | from_yaml }}"
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig | default(controller_kubeconfig) }}"
+
+    - name: Wait for Supervisor HTTPS Certificate
+      ansible.builtin.command: >-
+        kubectl wait --timeout=5m --for=condition=Ready
+        certificate.cert-manager.io/{{ pinniped_https_secret }}
+        -n {{ pinniped_namespace }}
+      register: wait_pinniped_certificate
+      until: wait_pinniped_certificate.rc == 0
+      retries: 20
+      delay: 6
+      changed_when: false
+
+    - name: Wait for Pinniped Supervisor Deployment
+      ansible.builtin.command: >-
+        kubectl wait --timeout=5m
+        -n {{ pinniped_namespace }}
+        --for=condition=Available
+        deployment/pinniped-supervisor
+      register: wait_pinniped_supervisor
+      until: wait_pinniped_supervisor.rc == 0
+      retries: 20
+      delay: 6
+      changed_when: false
+
+    - name: Wait for Pinniped Concierge Deployment
+      ansible.builtin.command: >-
+        kubectl wait --timeout=5m
+        -n {{ pinniped_namespace }}
+        --for=condition=Available
+        deployment/pinniped-concierge
+      register: wait_pinniped_concierge
+      until: wait_pinniped_concierge.rc == 0
+      retries: 20
+      delay: 6
+      changed_when: false
+
+    - name: Wait for FederationDomain Ready
+      ansible.builtin.command: >-
+        kubectl wait --timeout=5m
+        --for=jsonpath={.status.phase}=Ready
+        federationdomain.config.supervisor.pinniped.dev/{{ pinniped_idp_name }}
+        -n {{ pinniped_namespace }}
+      register: wait_pinniped_federationdomain
+      until: wait_pinniped_federationdomain.rc == 0
+      retries: 20
+      delay: 6
+      changed_when: false
+
+    - name: Wait for OIDCIdentityProvider Ready
+      ansible.builtin.command: >-
+        kubectl wait --timeout=5m
+        --for=jsonpath={.status.phase}=Ready
+        oidcidentityprovider.idp.supervisor.pinniped.dev/{{ pinniped_idp_name }}
+        -n {{ pinniped_namespace }}
+      register: wait_pinniped_oidcidp
+      until: wait_pinniped_oidcidp.rc == 0
+      retries: 20
+      delay: 6
+      changed_when: false
+
+    - name: Wait for Concierge login APIService Available
+      ansible.builtin.command: >-
+        kubectl wait --timeout=5m
+        --for=condition=Available
+        apiservice/v1alpha1.login.concierge.pinniped.dev
+      register: wait_pinniped_apiservice
+      until: wait_pinniped_apiservice.rc == 0
+      retries: 20
+      delay: 6
+      changed_when: false
+
+    - name: Wait for JWTAuthenticator Ready
+      ansible.builtin.command: >-
+        kubectl wait --timeout=5m
+        --for=jsonpath={.status.phase}=Ready
+        jwtauthenticator.authentication.concierge.pinniped.dev/{{ pinniped_jwtauthenticator }}
+      register: wait_pinniped_jwt
+      until: wait_pinniped_jwt.rc == 0
+      retries: 20
+      delay: 6
+      changed_when: false
+
+    - name: Wait for Supervisor OIDC discovery from the controller
+      ansible.builtin.uri:
+        url: "https://{{ pinniped_host }}/.well-known/openid-configuration"
+        ca_path: "{{ controller_ca_cert_path }}"
+        status_code: 200
+      register: wait_pinniped_oidc_discovery
+      retries: 20
+      delay: 6
+      until: wait_pinniped_oidc_discovery.status | default(0) | int == 200
+
+    - name: Install pinniped CLI on the controller
+      ansible.builtin.include_tasks: install_cli.yaml
+
+    - name: Generate Pinniped kubeconfig on the controller
+      ansible.builtin.shell: |
+        set -euo pipefail
+        tmp="$(mktemp "{{ pinniped_kubeconfig }}.XXXXXX")"
+        trap 'rm -f "$tmp"' EXIT
+        "{{ controller_bin_dir }}/pinniped" get kubeconfig \
+          --kubeconfig "{{ controller_kubeconfig }}" \
+          --pinniped-cli-path pinniped \
+          --concierge-authenticator-type jwt \
+          --concierge-authenticator-name "{{ pinniped_jwtauthenticator }}" \
+          --upstream-identity-provider-name "{{ pinniped_idp_name }}" \
+          -o "$tmp"
+        chmod 0600 "$tmp"
+        mv "$tmp" "{{ pinniped_kubeconfig }}"
+        trap - EXIT
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig | default(controller_kubeconfig) }}"
+
+    - name: Publish Pinniped kubeconfig Secret for login UI
+      ansible.builtin.shell: |
+        set -euo pipefail
+        kubectl -n {{ pinniped_namespace | quote }} create secret generic {{ pinniped_login_kubeconfig_secret | quote }} \
+          --from-file=kubeconfig={{ pinniped_kubeconfig | quote }} \
+          --dry-run=client -o yaml | kubectl apply -f -
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig | default(controller_kubeconfig) }}"
+      no_log: true

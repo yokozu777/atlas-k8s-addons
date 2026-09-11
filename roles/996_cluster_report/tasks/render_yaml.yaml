@@ -1,0 +1,7 @@
+---
+- name: Render cluster credentials YAML export
+  ansible.builtin.template:
+    src: cluster-credentials.yaml.j2
+    dest: "{{ cluster_credentials_file }}"
+    mode: '0600'
+  no_log: true

@@ -1,0 +1,4 @@
+---
+calico_felix_metrics_port: 9091
+calico_typha_metrics_port: 9093
+calico_kube_controllers_metrics_port: 9095

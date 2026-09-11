@@ -1,0 +1,28 @@
+config:
+  clientID: oauth2-proxy
+  provider: oidc  
+  clientSecret: "{{ k8s_secrets.oauth2_proxy_client_secret }}"
+  cookieSecret: "{{ k8s_secrets.oauth2_proxy_cookie_secret }}"
+  oidcIssuerURL: https://{{ keycloak_host }}/auth/realms/{{ keycloak_realm }}
+  redirectURL: "{{ oauth2_callback_url }}"
+  emailDomains:
+    - "*"
+  upstreams:
+    - "file:///dev/null"
+
+
+extraArgs:
+  provider: keycloak-oidc
+  oidc-issuer-url: https://{{ keycloak_host }}/auth/realms/{{ keycloak_realm }}
+  set-xauthrequest: "true"
+  cookie-domain: .{{ k8s_cluster_domain }}
+  whitelist-domain: .{{ k8s_cluster_domain }}
+  provider-display-name: "Keycloak"
+  ssl-insecure-skip-verify: "true"
+  # provider: keycloak-oidc
+  # set-xauthrequest: "true"
+  # ssl-insecure-skip-verify: "true"
+  # code-challenge-method: "S256"
+
+ingress:
+  enabled: false

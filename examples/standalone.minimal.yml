@@ -1,0 +1,12 @@
+# Minimal overlay historically used for early standalone experiments.
+# Prefer editing group_vars/all/atlas-k8s-addons.yml (full catalog) + examples/secrets.example.yml.
+#
+# Usage (optional):
+#   EXTRA_VARS_FILE=examples/standalone.minimal.yml ./run.sh --tags 130_validate_vars
+#
+# This file alone is NOT enough for 130_validate_vars — keep group_vars/all/atlas-k8s-addons.yml loaded.
+
+cluster_domain: k8s.example.com
+dns_domain_suffix: example.com
+use_internal_helm_repo: none
+get_snapshotter: github

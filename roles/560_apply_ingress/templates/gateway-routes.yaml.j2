@@ -1,0 +1,155 @@
+{% set gw_name = envoy_gateway_gateway_name %}
+{% set gw_ns = envoy_gateway_namespace %}
+{% set wildcard_secret = envoy_gateway_wildcard_secret %}
+{% set nsapps = namespace(https=[]) %}
+{% for ing in k8s_ingress_apps_active | default([]) %}
+{% set is_tls = (ing.ssl_passthrough | default(false) | bool) %}
+{% if not is_tls %}
+{% set _ = nsapps.https.append(ing) %}
+{% endif %}
+{% endfor %}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ wildcard_secret }}
+  namespace: {{ gw_ns }}
+spec:
+  secretName: {{ wildcard_secret }}
+  issuerRef:
+    name: {{ k8s_cluster_domain }}
+    kind: ClusterIssuer
+  dnsNames:
+    - "*.{{ k8s_cluster_domain }}"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ gw_name }}
+  namespace: {{ gw_ns }}
+spec:
+  gatewayClassName: {{ envoy_gateway_gatewayclass_name }}
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: {{ envoy_gateway_proxy_name }}
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: All
+{% for ing in nsapps.https %}
+    - name: https-{{ ing.name | replace('_', '-') }}
+      protocol: HTTPS
+      port: 443
+      hostname: {{ ing.host }}
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: {{ wildcard_secret }}
+      allowedRoutes:
+        namespaces:
+          from: All
+{% endfor %}
+{% for ing in k8s_ingress_apps_active | default([]) %}
+{% if (ing.ssl_passthrough | default(false) | bool) %}
+    - name: tls-{{ ing.name | replace('_', '-') }}
+      protocol: TLS
+      port: 443
+      hostname: {{ ing.host }}
+      tls:
+        mode: Passthrough
+      allowedRoutes:
+        namespaces:
+          from: All
+{% endif %}
+{% endfor %}
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyPatchPolicy
+metadata:
+  name: {{ gw_name }}-max-headers
+  namespace: {{ gw_ns }}
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: {{ gw_name }}
+  type: JSONPatch
+  jsonPatches:
+    - type: type.googleapis.com/envoy.config.listener.v3.Listener
+      name: tcp-80
+      operation:
+        op: add
+        path: /default_filter_chain/filters/0/typed_config/max_request_headers_kb
+        value: 128
+    - type: type.googleapis.com/envoy.config.listener.v3.Listener
+      name: tcp-443
+      operation:
+        op: add
+        jsonPath: "..filter_chains[?match(@.name, '.*https-.*')].filters[0].typed_config"
+        path: max_request_headers_kb
+        value: 128
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: https-redirect
+  namespace: {{ gw_ns }}
+spec:
+  parentRefs:
+    - name: {{ gw_name }}
+      namespace: {{ gw_ns }}
+      sectionName: http
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 301
+{% for ing in k8s_ingress_apps_active | default([]) %}
+{% set is_tls = (ing.ssl_passthrough | default(false) | bool) %}
+{% set is_oidc = ing.oidc_auth | default(false) | bool %}
+{% if is_tls %}
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata:
+  name: {{ ing.name }}
+  namespace: {{ ing.namespace }}
+spec:
+  parentRefs:
+    - name: {{ gw_name }}
+      namespace: {{ gw_ns }}
+      sectionName: tls-{{ ing.name | replace('_', '-') }}
+  hostnames:
+    - {{ ing.host }}
+  rules:
+    - backendRefs:
+        - name: {{ ing.service }}
+          port: {{ ing.port }}
+{% elif is_oidc %}
+{# HTTPRoute + SecurityPolicy OIDC are applied by 961_apply_oidc_ingress after the Keycloak realm exists. #}
+{% else %}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ ing.name }}
+  namespace: {{ ing.namespace }}
+spec:
+  parentRefs:
+    - name: {{ gw_name }}
+      namespace: {{ gw_ns }}
+      sectionName: https-{{ ing.name | replace('_', '-') }}
+  hostnames:
+    - {{ ing.host }}
+  rules:
+    - backendRefs:
+        - name: {{ ing.service }}
+          port: {{ ing.port }}
+{% endif %}
+{% endfor %}

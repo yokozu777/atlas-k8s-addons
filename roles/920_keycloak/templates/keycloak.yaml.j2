@@ -1,0 +1,67 @@
+fullnameOverride: keycloak
+nameOverride: keycloak
+
+command:
+  - "/opt/keycloak/bin/kc.sh"
+  - "start"
+  - "--http-port=8080"
+  - "--hostname-strict=false"
+  - "--hostname={{ keycloak_host }}"
+
+extraEnv: |
+  - name: KC_BOOTSTRAP_ADMIN_USERNAME
+    value: "admin"
+  - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+    value: "{{ k8s_secrets.keycloak_admin_password }}"
+  - name: JAVA_OPTS_APPEND
+    value: "-Djgroups.dns.query=keycloak-headless"
+  - name: KC_DB_URL_PROPERTIES
+    value: "?sslmode=require"
+  - name: KC_HTTP_METRICS_HISTOGRAMS_ENABLED
+    value: "true"
+
+replicas: 1
+
+database:
+  vendor: postgres
+  hostname: "{{ keycloak_cnpg_cluster_name }}-rw"
+  port: 5432
+  database: keycloak
+  username: keycloak
+  existingSecret: "{{ keycloak_cnpg_cluster_name }}-app"
+  existingSecretKey: password
+
+dbchecker:
+  enabled: true
+
+http:
+  relativePath: /auth
+
+proxy:
+  enabled: true
+  mode: xforwarded
+  http:
+    enabled: true
+
+ingress:
+  enabled: false
+
+metrics:
+  enabled: true
+
+health:
+  enabled: true
+
+serviceMonitor:
+  enabled: false
+
+rbac:
+  create: true
+  rules:
+    - apiGroups:
+        - ""
+      resources:
+        - pods
+      verbs:
+        - get
+        - list

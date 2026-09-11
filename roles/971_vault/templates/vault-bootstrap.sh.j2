@@ -1,0 +1,160 @@
+#!/bin/bash
+set -euo pipefail
+
+export KUBECONFIG="{{ k8s_kubeconfig }}"
+
+NAMESPACE="{{ vault_namespace }}"
+INIT_POD="vault-0"
+KEYS_FILE="{{ k8s_manifests_dir }}/vault-init-keys.txt"
+ADMIN_USER="${VAULT_ADMIN_USER:?VAULT_ADMIN_USER is required}"
+ADMIN_PASSWORD="${VAULT_ADMIN_PASSWORD:?VAULT_ADMIN_PASSWORD is required}"
+OIDC_CLIENT_SECRET="${VAULT_OIDC_CLIENT_SECRET:?VAULT_OIDC_CLIENT_SECRET is required}"
+OIDC_CA_FILE="${VAULT_OIDC_CA_FILE:?VAULT_OIDC_CA_FILE is required}"
+OIDC_ISSUER="{{ oidc_issuer_url }}"
+VAULT_PUBLIC_HOST="{{ vault_host }}"
+ESO_SA="{{ eso_service_account | default('external-secrets') }}"
+ESO_NS="{{ vault_namespace }}"
+
+vault_cmd() {
+  kubectl exec -n "$NAMESPACE" "$INIT_POD" -- \
+    env VAULT_TOKEN="$VAULT_TOKEN" VAULT_ADDR=http://127.0.0.1:8200 \
+    vault "$@"
+}
+
+vault_cmd_stdin() {
+  kubectl exec -i -n "$NAMESPACE" "$INIT_POD" -- \
+    env VAULT_TOKEN="$VAULT_TOKEN" VAULT_ADDR=http://127.0.0.1:8200 \
+    vault "$@"
+}
+
+resolve_token() {
+  local login_json
+  local rc
+
+  set +e
+  login_json=$(kubectl exec -n "$NAMESPACE" "$INIT_POD" -- \
+    env VAULT_ADDR=http://127.0.0.1:8200 \
+    vault login -method=userpass -format=json \
+    username="$ADMIN_USER" password="$ADMIN_PASSWORD" 2>/dev/null)
+  rc=$?
+  set -e
+
+  if [[ "$rc" -eq 0 ]]; then
+    VAULT_TOKEN="$(echo "$login_json" | jq -r '.auth.client_token')"
+    if [[ -n "$VAULT_TOKEN" && "$VAULT_TOKEN" != "null" ]]; then
+      echo "Authenticated to Vault as userpass ${ADMIN_USER}"
+      return 0
+    fi
+  fi
+
+  if [[ ! -s "$KEYS_FILE" ]]; then
+    echo "ERROR: userpass login failed and keys file $KEYS_FILE is missing" >&2
+    exit 1
+  fi
+
+  VAULT_TOKEN="$(grep -E '^Initial Root Token:' "$KEYS_FILE" | awk '{print $NF}')"
+  if [[ -z "$VAULT_TOKEN" ]]; then
+    echo "ERROR: Initial Root Token not found in $KEYS_FILE" >&2
+    exit 1
+  fi
+  echo "Authenticated to Vault with root token from keys file"
+}
+
+enable_auth() {
+  local path="$1"
+  local type="$2"
+  if vault_cmd auth list -format=json | jq -e --arg p "${path}/" 'has($p)' >/dev/null; then
+    echo "Auth method ${path}/ already enabled"
+    return 0
+  fi
+  vault_cmd auth enable -path="$path" "$type"
+}
+
+enable_secrets() {
+  local path="$1"
+  local type="$2"
+  if vault_cmd secrets list -format=json | jq -e --arg p "${path}/" 'has($p)' >/dev/null; then
+    echo "Secrets engine ${path}/ already enabled"
+    return 0
+  fi
+  vault_cmd secrets enable -path="$path" "$type"
+}
+
+resolve_token
+
+enable_auth userpass userpass
+enable_secrets secret kv-v2
+
+vault_cmd_stdin policy write vault-admin - <<'EOF'
+path "*" {
+  capabilities = ["create", "read", "update", "delete", "list", "sudo"]
+}
+EOF
+
+vault_cmd write "auth/userpass/users/${ADMIN_USER}" \
+  password="${ADMIN_PASSWORD}" \
+  policies=vault-admin
+echo "Vault userpass user ${ADMIN_USER} ensured (policy vault-admin)"
+
+enable_auth kubernetes kubernetes
+
+K8S_HOST="$(kubectl exec -n "$NAMESPACE" "$INIT_POD" -- printenv KUBERNETES_SERVICE_HOST)"
+K8S_PORT="$(kubectl exec -n "$NAMESPACE" "$INIT_POD" -- printenv KUBERNETES_SERVICE_PORT_HTTPS)"
+vault_cmd write auth/kubernetes/config \
+  kubernetes_host="https://${K8S_HOST}:${K8S_PORT}" \
+  disable_iss_validation=true
+
+vault_cmd_stdin policy write eso-read - <<'EOF'
+path "secret/data/*" {
+  capabilities = ["read", "list"]
+}
+path "secret/metadata/*" {
+  capabilities = ["read", "list"]
+}
+EOF
+
+vault_cmd write auth/kubernetes/role/eso \
+  bound_service_account_names="${ESO_SA}" \
+  bound_service_account_namespaces="${ESO_NS}" \
+  policies=eso-read \
+  ttl=24h
+echo "Vault kubernetes role eso ensured (policy eso-read)"
+
+if [[ ! -s "$OIDC_CA_FILE" ]]; then
+  echo "ERROR: OIDC CA file $OIDC_CA_FILE is missing or empty" >&2
+  exit 1
+fi
+
+enable_auth oidc oidc
+vault_cmd auth tune -listing-visibility=unauth oidc/
+
+kubectl exec -i -n "$NAMESPACE" "$INIT_POD" -- \
+  tee /tmp/vault-oidc-ca.pem < "$OIDC_CA_FILE" >/dev/null
+vault_cmd write auth/oidc/config \
+  oidc_discovery_url="$OIDC_ISSUER" \
+  oidc_client_id=vault \
+  oidc_client_secret="$OIDC_CLIENT_SECRET" \
+  oidc_discovery_ca_pem=@/tmp/vault-oidc-ca.pem \
+  default_role=default
+kubectl exec -n "$NAMESPACE" "$INIT_POD" -- rm -f /tmp/vault-oidc-ca.pem
+
+vault_cmd_stdin write auth/oidc/role/default - <<EOF
+{
+  "role_type": "oidc",
+  "allowed_redirect_uris": [
+    "https://${VAULT_PUBLIC_HOST}/ui/vault/auth/oidc/oidc/callback",
+    "http://localhost:8250/oidc/callback"
+  ],
+  "bound_audiences": "vault",
+  "user_claim": "preferred_username",
+  "groups_claim": "groups",
+  "oidc_scopes": "openid,profile,email",
+  "bound_claims_type": "string",
+  "bound_claims": { "groups": ["vault-admins"] },
+  "token_policies": "vault-admin",
+  "token_ttl": "1h"
+}
+EOF
+echo "Vault OIDC auth ensured (Keycloak client vault, group vault-admins)"
+
+echo "Vault bootstrap completed successfully."

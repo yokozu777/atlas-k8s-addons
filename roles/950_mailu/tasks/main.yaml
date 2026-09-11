@@ -1,0 +1,200 @@
+    - name: Remove {{ mailu_namespace }} Helm chart (absent)
+      when: mailu_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: mailu
+            namespace: "{{ mailu_namespace }}"
+        helm_chart_absent_ingress_app_names:
+          - mailu
+        helm_chart_absent_delete_namespace: true
+        helm_chart_absent_namespaces:
+          - "{{ mailu_namespace }}"
+        helm_chart_absent_extra_resources:
+          - api_version: cert-manager.io/v1
+            kind: Certificate
+            name: "{{ mailu_https_secret }}"
+            namespace: "{{ mailu_namespace }}"
+          - api_version: v1
+            kind: Secret
+            name: "{{ mailu_secret_name }}"
+            namespace: "{{ mailu_namespace }}"
+          - api_version: v1
+            kind: Secret
+            name: "{{ mailu_https_secret }}"
+            namespace: "{{ mailu_namespace }}"
+          - api_version: externaldns.k8s.io/v1alpha1
+            kind: DNSEndpoint
+            name: mailu-mx
+            namespace: "{{ mailu_namespace }}"
+          - api_version: apps/v1
+            kind: Deployment
+            name: mailu-unbound
+            namespace: "{{ mailu_namespace }}"
+          - api_version: v1
+            kind: Service
+            name: mailu-unbound
+            namespace: "{{ mailu_namespace }}"
+          - api_version: v1
+            kind: ConfigMap
+            name: mailu-unbound
+            namespace: "{{ mailu_namespace }}"
+        helm_chart_absent_extra_label_selectors:
+          - namespace: "{{ mailu_namespace }}"
+            selector: app.kubernetes.io/name=mailu-unbound
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/mailu_values.yaml"
+          - "{{ k8s_manifests_dir }}/mailu-certificate.yaml"
+          - "{{ k8s_manifests_dir }}/mailu-secret.yaml"
+          - "{{ k8s_manifests_dir }}/mailu-mx.yaml"
+          - "{{ k8s_manifests_dir }}/mailu-unbound.yaml"
+
+    - name: Install/configure mailu chart
+      when: mailu_chart_state | default('present') == 'present'
+      block:
+        - name: Require Mailu secrets
+          ansible.builtin.assert:
+            that:
+              - k8s_secrets.mailu_secret_key | default('') | length > 0
+              - k8s_secrets.mailu_initial_password | default('') | length > 0
+              - mailu_host | default('') | length > 0
+              - mailu_mx_host | default('') | length > 0
+              - mailu_domain | default('') | length > 0
+              - mailu_unbound_cluster_ip | default('') | length > 0
+            fail_msg: >-
+              mailu requires mailu_host, mailu_mx_host, mailu_domain,
+              mailu_unbound_cluster_ip, k8s_secrets.mailu_secret_key,
+              and k8s_secrets.mailu_initial_password
+
+        - name: Ensure Mailu namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ mailu_namespace }}"
+            state: present
+
+        - name: Render Mailu secret
+          ansible.builtin.template:
+            src: mailu-secret.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/mailu-secret.yaml"
+            mode: "0600"
+          no_log: true
+
+        - name: Apply Mailu secret
+          ansible.builtin.command: >-
+            kubectl --validate=false apply -f {{ k8s_manifests_dir }}/mailu-secret.yaml
+
+        - name: Render Mailu TLS Certificate
+          ansible.builtin.template:
+            src: mailu-certificate.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/mailu-certificate.yaml"
+            mode: "0644"
+
+        - name: Apply Mailu TLS Certificate
+          ansible.builtin.command: >-
+            kubectl --validate=false apply -f {{ k8s_manifests_dir }}/mailu-certificate.yaml
+
+        - name: Wait for Mailu TLS Certificate
+          ansible.builtin.command: >-
+            kubectl wait --timeout=5m --for=condition=Ready
+            certificate.cert-manager.io/{{ mailu_https_secret }}
+            -n {{ mailu_namespace }}
+          register: wait_mailu_certificate
+          until: wait_mailu_certificate.rc == 0
+          retries: 20
+          delay: 6
+          changed_when: false
+
+        - name: Render Mailu Unbound
+          ansible.builtin.template:
+            src: mailu-unbound.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/mailu-unbound.yaml"
+            mode: "0644"
+
+        - name: Apply Mailu Unbound
+          ansible.builtin.command: >-
+            kubectl --validate=false apply -f {{ k8s_manifests_dir }}/mailu-unbound.yaml
+
+        - name: Wait for Mailu Unbound Deployment
+          ansible.builtin.command: >-
+            kubectl wait --timeout=5m
+            -n {{ mailu_namespace }}
+            --for=condition=Available
+            deployment/mailu-unbound
+          register: wait_mailu_unbound
+          until: wait_mailu_unbound.rc == 0
+          retries: 20
+          delay: 6
+          changed_when: false
+
+        - name: Render Mailu helm values
+          ansible.builtin.template:
+            src: mailu_values.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/mailu_values.yaml"
+            mode: "0644"
+
+        - name: Helming {{ mailu_namespace }}
+          ansible.builtin.command: >-
+            helm upgrade --install mailu mailu/mailu
+            --namespace {{ mailu_namespace }} --create-namespace
+            -f {{ k8s_manifests_dir }}/mailu_values.yaml
+            {{ mailu_chart_version | helm_chart_version_args }}
+          changed_when: true
+
+        - name: Wait for Mailu front Deployment
+          ansible.builtin.command: >-
+            kubectl wait --timeout=10m
+            -n {{ mailu_namespace }}
+            --for=condition=Available
+            deployment/mailu-front
+          register: wait_mailu_front
+          until: wait_mailu_front.rc == 0
+          retries: 30
+          delay: 10
+          changed_when: false
+
+        - name: Wait for Mailu admin Deployment
+          ansible.builtin.command: >-
+            kubectl wait --timeout=10m
+            -n {{ mailu_namespace }}
+            --for=condition=Available
+            deployment/mailu-admin
+          register: wait_mailu_admin
+          until: wait_mailu_admin.rc == 0
+          retries: 30
+          delay: 10
+          changed_when: false
+
+        - name: Wait for Mailu rspamd Deployment
+          ansible.builtin.command: >-
+            kubectl wait --timeout=10m
+            -n {{ mailu_namespace }}
+            --for=condition=Available
+            deployment/mailu-rspamd
+          register: wait_mailu_rspamd
+          until: wait_mailu_rspamd.rc == 0
+          retries: 30
+          delay: 10
+          changed_when: false
+
+        - name: Wait for Mailu webmail Deployment
+          ansible.builtin.command: >-
+            kubectl wait --timeout=10m
+            -n {{ mailu_namespace }}
+            --for=condition=Available
+            deployment/mailu-webmail
+          register: wait_mailu_webmail
+          until: wait_mailu_webmail.rc == 0
+          retries: 30
+          delay: 10
+          changed_when: false
+
+        - name: Render Mailu apex MX DNSEndpoint
+          ansible.builtin.template:
+            src: mailu-mx.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/mailu-mx.yaml"
+            mode: "0644"
+
+        - name: Apply Mailu apex MX DNSEndpoint
+          ansible.builtin.command: >-
+            kubectl --validate=false apply -f {{ k8s_manifests_dir }}/mailu-mx.yaml

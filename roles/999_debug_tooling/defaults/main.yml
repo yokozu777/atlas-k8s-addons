@@ -1,0 +1,26 @@
+---
+# Inventory group targeting (must match playbook / group_vars/all/atlas-k8s-addons.yml).
+k8s_master_hosts: k8s_masters
+k8s_worker_hosts: k8s_workers
+
+debug_tooling_install_dir: /usr/local/bin
+debug_tooling_staging_dir: /var/tmp/ansible-debug-tooling
+
+debug_tooling_helm_enabled: false
+debug_tooling_helm_hosts: "{{ k8s_master_hosts }}"
+
+debug_tooling_calicoctl_enabled: true
+debug_tooling_calicoctl_hosts: "{{ k8s_master_hosts }}"
+
+debug_tooling_istioctl_enabled: true
+debug_tooling_istioctl_hosts: "{{ k8s_master_hosts }}"
+
+debug_tooling_etcdctl_enabled: true
+debug_tooling_etcdctl_hosts: "{{ k8s_master_hosts }}"
+
+# github = public GitHub Releases; infra = helm-nginx releases.helm.* vhost
+debug_tooling_binary_source: github
+debug_tooling_binary_infra_base: ""
+
+# Empty = skip. Inventory group, g1:g2, or CSV host/IP list.
+debug_tooling_install_kubeconfig: ""

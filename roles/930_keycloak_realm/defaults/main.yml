@@ -1,0 +1,12 @@
+---
+# Ephemeral Terraform workspace on Ansible controller (created and removed per run).
+# SoT: clusters/*/group_vars/all/cluster.yml (keycloak_tf_workspace).
+keycloak_tf_workspace: "{{ controller_staging_dir }}/keycloak-realm"
+# Filesystem mirror for terraform-provider-keycloak (lab overlay: /usr/local/share/terraform/plugins).
+keycloak_tf_plugin_dir: "{{ lookup('env', 'HOME') }}/.terraform.d/plugins"
+keycloak_tf_plugin_cache_dir: "{{ lookup('env', 'HOME') }}/.terraform.d/plugin-cache"
+keycloak_tf_provider_version: "5.8.0"
+keycloak_oidc_username: admin
+keycloak_oidc_user_email: "admin-oidc@{{ dns_domain_suffix }}"
+keycloak_oidc_user_first_name: Admin
+keycloak_oidc_user_last_name: OIDC

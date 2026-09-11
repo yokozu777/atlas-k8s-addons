@@ -1,0 +1,451 @@
+terraform {
+  required_providers {
+    keycloak = {
+      source  = "keycloak/keycloak"
+      version = "{{ keycloak_tf_provider_version }}"
+    }
+  }
+}
+  
+  provider "keycloak" {
+    client_id             = "admin-cli"
+    username              = "admin"
+    password              = "{{ k8s_secrets.keycloak_admin_password }}"
+    url                   = "{{ keycloak_url }}"
+    realm                 = "master"
+    base_path             = "/auth"
+    root_ca_certificate   = file("${path.module}/root-ca.pem")
+  }
+  
+#  variable "kc_user" {
+#    type    = string
+#  }
+  
+#  variable "kc_pass" {
+#    type    = string
+#  }
+  
+  # 1. Realm: example
+  resource "keycloak_realm" "org" {
+    realm   = "{{ keycloak_realm }}"
+    enabled = true
+  }
+
+  locals {
+    # KC 26: "openid" is an OIDC protocol scope on authorize, not an Admin API
+    # client scope. Built-in "basic" carries sub/auth_time (old openid slot).
+    kc26_oidc_builtin_default_scopes = [
+      "basic",
+      "profile",
+      "email",
+      "roles",
+      "web-origins",
+    ]
+  }
+
+  # 2. User: realm OIDC test user (catalog keycloak_oidc_*)
+  resource "keycloak_user" "admin_user" {
+    realm_id    = keycloak_realm.org.id
+    username    = "{{ keycloak_oidc_username }}"
+    enabled     = true
+    email       = "{{ keycloak_oidc_user_email }}"
+    email_verified = true
+    first_name     = "{{ keycloak_oidc_user_first_name }}"
+    last_name      = "{{ keycloak_oidc_user_last_name }}"
+  
+    initial_password {
+      value     = "{{ k8s_secrets.keycloak_oidc_user_password }}"
+      temporary = false
+    }
+  }
+  
+  # 3. Client Scope: aud-oauth2-proxy
+  resource "keycloak_openid_client_scope" "aud_scope" {
+    realm_id = keycloak_realm.org.id
+    name     = "aud-oauth2-proxy"
+    # protocol = "openid-connect"
+  }
+  
+  resource "keycloak_openid_audience_protocol_mapper" "aud_mapper" {
+    realm_id        = keycloak_realm.org.id
+    client_scope_id = keycloak_openid_client_scope.aud_scope.id
+    name            = "aud-oauth2-proxy"
+  
+    included_custom_audience = "oauth2-proxy"
+    add_to_id_token          = true
+    add_to_access_token      = true
+  }
+  
+  # 4. Client: oauth2-proxy
+  resource "keycloak_openid_client" "oauth2_proxy_client" {
+    realm_id                     = keycloak_realm.org.id
+    client_id                    = "oauth2-proxy"
+    name                         = "OAuth2 Proxy"
+    enabled                      = true
+    access_type                  = "CONFIDENTIAL"
+    client_secret                = "{{ k8s_secrets.oauth2_proxy_client_secret }}"
+  
+    standard_flow_enabled                     = true
+    direct_access_grants_enabled              = true
+    oauth2_device_authorization_grant_enabled = true
+  
+    backchannel_logout_session_required = false
+  
+    root_url            = "https://{{ grafana_host }}"
+    valid_redirect_uris = ["{{ oauth2_callback_url }}"]
+    web_origins         = ["*"]
+  }
+  
+  # 5. Bind client scope to the oauth2-proxy client
+  resource "keycloak_openid_client_default_scopes" "oauth2_proxy_defaults" {
+    realm_id  = keycloak_realm.org.id
+    client_id = keycloak_openid_client.oauth2_proxy_client.id
+
+    default_scopes = concat(local.kc26_oidc_builtin_default_scopes, ["aud-oauth2-proxy"])
+  }
+
+  # 6. Client: envoy-gateway (SecurityPolicy OIDC for Grafana/Headlamp)
+  resource "keycloak_openid_client_scope" "aud_eg_scope" {
+    realm_id = keycloak_realm.org.id
+    name     = "aud-envoy-gateway"
+  }
+
+  resource "keycloak_openid_audience_protocol_mapper" "aud_eg_mapper" {
+    realm_id        = keycloak_realm.org.id
+    client_scope_id = keycloak_openid_client_scope.aud_eg_scope.id
+    name            = "aud-envoy-gateway"
+
+    included_custom_audience = "envoy-gateway"
+    add_to_id_token          = true
+    add_to_access_token      = true
+  }
+
+  resource "keycloak_openid_client" "envoy_gateway_client" {
+    realm_id                     = keycloak_realm.org.id
+    client_id                    = "envoy-gateway"
+    name                         = "Envoy Gateway"
+    enabled                      = true
+    access_type                  = "CONFIDENTIAL"
+    client_secret                = "{{ k8s_secrets.envoy_gateway_oidc_client_secret }}"
+
+    standard_flow_enabled                     = true
+    direct_access_grants_enabled              = true
+    oauth2_device_authorization_grant_enabled = true
+
+    backchannel_logout_session_required = false
+
+    valid_redirect_uris = [
+{% for ing in k8s_ingress_apps | default([]) %}
+{% if ing.oidc_auth | default(false) | bool %}
+      "https://{{ ing.host }}/oauth2/callback",
+{% endif %}
+{% endfor %}
+    ]
+    web_origins = ["*"]
+  }
+
+  resource "keycloak_openid_client_default_scopes" "envoy_gateway_defaults" {
+    realm_id  = keycloak_realm.org.id
+    client_id = keycloak_openid_client.envoy_gateway_client.id
+
+    default_scopes = concat(local.kc26_oidc_builtin_default_scopes, ["aud-envoy-gateway"])
+  }
+
+  # 7. Client: vault (Vault auth/oidc — not Envoy SecurityPolicy)
+  resource "keycloak_openid_client_scope" "aud_vault_scope" {
+    realm_id = keycloak_realm.org.id
+    name     = "aud-vault"
+  }
+
+  resource "keycloak_openid_audience_protocol_mapper" "aud_vault_mapper" {
+    realm_id        = keycloak_realm.org.id
+    client_scope_id = keycloak_openid_client_scope.aud_vault_scope.id
+    name            = "aud-vault"
+
+    included_custom_audience = "vault"
+    add_to_id_token          = true
+    add_to_access_token      = true
+  }
+
+  resource "keycloak_openid_client" "vault_client" {
+    realm_id                     = keycloak_realm.org.id
+    client_id                    = "vault"
+    name                         = "Vault"
+    enabled                      = true
+    access_type                  = "CONFIDENTIAL"
+    client_secret                = "{{ k8s_secrets.vault_oidc_client_secret }}"
+
+    standard_flow_enabled                     = true
+    direct_access_grants_enabled              = true
+    oauth2_device_authorization_grant_enabled = true
+
+    backchannel_logout_session_required = false
+
+    root_url = "https://{{ vault_host }}"
+    valid_redirect_uris = [
+      "https://{{ vault_host }}/ui/vault/auth/oidc/oidc/callback",
+      "http://localhost:8250/oidc/callback",
+    ]
+    web_origins = ["https://{{ vault_host }}"]
+  }
+
+  resource "keycloak_openid_client_default_scopes" "vault_defaults" {
+    realm_id  = keycloak_realm.org.id
+    client_id = keycloak_openid_client.vault_client.id
+
+    default_scopes = concat(local.kc26_oidc_builtin_default_scopes, ["aud-vault"])
+  }
+
+  resource "keycloak_group" "vault_admins" {
+    realm_id = keycloak_realm.org.id
+    name     = "vault-admins"
+  }
+
+  resource "keycloak_group_memberships" "vault_admins_members" {
+    realm_id = keycloak_realm.org.id
+    group_id = keycloak_group.vault_admins.id
+    members = [
+      keycloak_user.admin_user.username,
+    ]
+  }
+
+  resource "keycloak_openid_group_membership_protocol_mapper" "vault_groups" {
+    realm_id  = keycloak_realm.org.id
+    client_id = keycloak_openid_client.vault_client.id
+    name      = "groups"
+
+    claim_name          = "groups"
+    full_path           = false
+    add_to_id_token     = true
+    add_to_access_token = true
+    add_to_userinfo     = true
+  }
+
+  # 8. Client: argocd (Argo CD native OIDC — not Envoy SecurityPolicy)
+  resource "keycloak_openid_client_scope" "aud_argocd_scope" {
+    realm_id = keycloak_realm.org.id
+    name     = "aud-argocd"
+  }
+
+  resource "keycloak_openid_audience_protocol_mapper" "aud_argocd_mapper" {
+    realm_id        = keycloak_realm.org.id
+    client_scope_id = keycloak_openid_client_scope.aud_argocd_scope.id
+    name            = "aud-argocd"
+
+    included_custom_audience = "argocd"
+    add_to_id_token          = true
+    add_to_access_token      = true
+  }
+
+  resource "keycloak_openid_client" "argocd_client" {
+    realm_id                     = keycloak_realm.org.id
+    client_id                    = "argocd"
+    name                         = "Argo CD"
+    enabled                      = true
+    access_type                  = "CONFIDENTIAL"
+    client_secret                = "{{ k8s_secrets.argocd_oidc_client_secret }}"
+
+    standard_flow_enabled                     = true
+    direct_access_grants_enabled              = false
+    oauth2_device_authorization_grant_enabled = false
+
+    backchannel_logout_session_required = false
+
+    root_url = "https://{{ argocd_host }}"
+    valid_redirect_uris = [
+      "https://{{ argocd_host }}/auth/callback",
+      "http://localhost:8085/auth/callback",
+    ]
+    valid_post_logout_redirect_uris = [
+      "https://{{ argocd_host }}",
+      "https://{{ argocd_host }}/",
+    ]
+    web_origins = ["https://{{ argocd_host }}"]
+
+    lifecycle {
+      ignore_changes = [
+        authentication_flow_binding_overrides,
+      ]
+    }
+  }
+
+  resource "keycloak_openid_client_default_scopes" "argocd_defaults" {
+    realm_id  = keycloak_realm.org.id
+    client_id = keycloak_openid_client.argocd_client.id
+
+    default_scopes = concat(local.kc26_oidc_builtin_default_scopes, ["aud-argocd"])
+  }
+
+  resource "keycloak_group" "argocd_admins" {
+    realm_id = keycloak_realm.org.id
+    name     = "argocd-admins"
+  }
+
+  resource "keycloak_group_memberships" "argocd_admins_members" {
+    realm_id = keycloak_realm.org.id
+    group_id = keycloak_group.argocd_admins.id
+    members = [
+      keycloak_user.admin_user.username,
+    ]
+  }
+
+  resource "keycloak_openid_group_membership_protocol_mapper" "argocd_groups" {
+    realm_id  = keycloak_realm.org.id
+    client_id = keycloak_openid_client.argocd_client.id
+    name      = "groups"
+
+    claim_name          = "groups"
+    full_path           = false
+    add_to_id_token     = true
+    add_to_access_token = true
+    add_to_userinfo     = true
+  }
+
+  resource "keycloak_role" "argocd_access" {
+    realm_id    = keycloak_realm.org.id
+    name        = "argocd-access"
+    description = "Login to client argocd; assigned via group /argocd-admins"
+  }
+
+  resource "keycloak_group_roles" "argocd_admins_roles" {
+    realm_id   = keycloak_realm.org.id
+    group_id   = keycloak_group.argocd_admins.id
+    exhaustive = false
+    role_ids = [
+      keycloak_role.argocd_access.id,
+    ]
+  }
+
+  # 9. Client: kubernetes (kubectl oidc-login / kubelogin — public + PKCE)
+  resource "keycloak_openid_client_scope" "aud_kubernetes_scope" {
+    realm_id = keycloak_realm.org.id
+    name     = "aud-kubernetes"
+  }
+
+  resource "keycloak_openid_audience_protocol_mapper" "aud_kubernetes_mapper" {
+    realm_id        = keycloak_realm.org.id
+    client_scope_id = keycloak_openid_client_scope.aud_kubernetes_scope.id
+    name            = "aud-kubernetes"
+
+    included_custom_audience = "kubernetes"
+    add_to_id_token          = true
+    add_to_access_token      = true
+  }
+
+  resource "keycloak_openid_client" "kubernetes_client" {
+    realm_id                     = keycloak_realm.org.id
+    client_id                    = "kubernetes"
+    name                         = "Kubernetes"
+    enabled                      = true
+    access_type                  = "PUBLIC"
+    pkce_code_challenge_method   = "S256"
+
+    standard_flow_enabled                     = true
+    direct_access_grants_enabled              = false
+    oauth2_device_authorization_grant_enabled = false
+
+    backchannel_logout_session_required = false
+
+    valid_redirect_uris = [
+      "http://localhost:8000",
+      "http://localhost:8000/",
+      "http://localhost:18000",
+      "http://localhost:18000/",
+      "http://127.0.0.1:8000",
+      "http://127.0.0.1:8000/",
+      "http://127.0.0.1:18000",
+      "http://127.0.0.1:18000/",
+    ]
+    web_origins = ["+"]
+  }
+
+  resource "keycloak_openid_client_default_scopes" "kubernetes_defaults" {
+    realm_id  = keycloak_realm.org.id
+    client_id = keycloak_openid_client.kubernetes_client.id
+
+    default_scopes = concat(local.kc26_oidc_builtin_default_scopes, ["aud-kubernetes"])
+  }
+
+  resource "keycloak_group" "k8s_admins" {
+    realm_id = keycloak_realm.org.id
+    name     = "k8s-admins"
+  }
+
+  resource "keycloak_group_memberships" "k8s_admins_members" {
+    realm_id = keycloak_realm.org.id
+    group_id = keycloak_group.k8s_admins.id
+    members = [
+      keycloak_user.admin_user.username,
+    ]
+  }
+
+  resource "keycloak_openid_group_membership_protocol_mapper" "kubernetes_groups" {
+    realm_id  = keycloak_realm.org.id
+    client_id = keycloak_openid_client.kubernetes_client.id
+    name      = "groups"
+
+    claim_name          = "groups"
+    full_path           = false
+    add_to_id_token     = true
+    add_to_access_token = true
+    add_to_userinfo     = true
+  }
+
+  # 10. Client: pinniped-supervisor (Pinniped Supervisor upstream OIDC — confidential)
+  resource "keycloak_openid_client_scope" "aud_pinniped_supervisor_scope" {
+    realm_id = keycloak_realm.org.id
+    name     = "aud-pinniped-supervisor"
+  }
+
+  resource "keycloak_openid_audience_protocol_mapper" "aud_pinniped_supervisor_mapper" {
+    realm_id        = keycloak_realm.org.id
+    client_scope_id = keycloak_openid_client_scope.aud_pinniped_supervisor_scope.id
+    name            = "aud-pinniped-supervisor"
+
+    included_custom_audience = "pinniped-supervisor"
+    add_to_id_token          = true
+    add_to_access_token      = true
+  }
+
+  resource "keycloak_openid_client" "pinniped_supervisor_client" {
+    realm_id                     = keycloak_realm.org.id
+    client_id                    = "pinniped-supervisor"
+    name                         = "Pinniped Supervisor"
+    enabled                      = true
+    access_type                  = "CONFIDENTIAL"
+    client_secret                = "{{ k8s_secrets.pinniped_supervisor_client_secret }}"
+
+    standard_flow_enabled                     = true
+    direct_access_grants_enabled              = false
+    oauth2_device_authorization_grant_enabled = false
+
+    backchannel_logout_session_required = false
+
+    root_url = "https://{{ pinniped_host }}"
+    valid_redirect_uris = [
+      "https://{{ pinniped_host }}/callback",
+    ]
+    web_origins = ["https://{{ pinniped_host }}"]
+  }
+
+  resource "keycloak_openid_client_default_scopes" "pinniped_supervisor_defaults" {
+    realm_id  = keycloak_realm.org.id
+    client_id = keycloak_openid_client.pinniped_supervisor_client.id
+
+    # offline_access is a Keycloak built-in optional scope on new clients.
+    # Listing it here fails: "already attached to client as an optional scope".
+    # Pinniped requests it via OIDCIdentityProvider additionalScopes.
+    default_scopes = concat(local.kc26_oidc_builtin_default_scopes, ["aud-pinniped-supervisor"])
+  }
+
+  resource "keycloak_openid_group_membership_protocol_mapper" "pinniped_supervisor_groups" {
+    realm_id  = keycloak_realm.org.id
+    client_id = keycloak_openid_client.pinniped_supervisor_client.id
+    name      = "groups"
+
+    claim_name          = "groups"
+    full_path           = false
+    add_to_id_token     = true
+    add_to_access_token = true
+    add_to_userinfo     = true
+  }

@@ -1,0 +1,107 @@
+---
+- name: Assert first control-plane host is defined in inventory
+  ansible.builtin.assert:
+    that:
+      - k8s_fetch_kubeconfig_master_host | default('') | length > 0
+    fail_msg: >-
+      Cannot fetch kubeconfig: inventory group named by
+      k8s_master_hosts={{ k8s_master_hosts }} is empty.
+      Run 21_kubeadm_init on a control-plane node first.
+
+- name: Ensure controller workspace directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0700'
+  loop:
+    - "{{ controller_workspace }}"
+    - "{{ controller_workspace }}/kubeconfig"
+    - "{{ k8s_fetch_kubeconfig_scripts_dir }}"
+
+- name: Build SSH argv to verify remote admin kubeconfig
+  ansible.builtin.set_fact:
+    k8s_fetch_kubeconfig_ssh_test_argv: >-
+      {{
+        [
+          'ssh',
+          '-o', 'BatchMode=yes',
+          '-o', 'ConnectTimeout=30',
+          '-o', 'StrictHostKeyChecking=no',
+          '-o', 'UserKnownHostsFile=/dev/null',
+        ]
+        + (
+          ['-i', k8s_fetch_kubeconfig_ssh_private_key_file]
+          if (k8s_fetch_kubeconfig_ssh_private_key_file | default('') | length > 0)
+          else []
+        )
+        + (k8s_fetch_kubeconfig_ssh_extra_args | default([]))
+        + [
+          k8s_fetch_kubeconfig_ssh_target,
+          'sudo',
+          'test',
+          '-f',
+          k8s_fetch_kubeconfig_remote_path,
+        ]
+      }}
+
+- name: Verify cluster admin kubeconfig exists on first control-plane node
+  ansible.builtin.command:
+    argv: "{{ k8s_fetch_kubeconfig_ssh_test_argv }}"
+  register: k8s_fetch_remote_kc_check
+  changed_when: false
+  failed_when: false
+
+- name: Fail when cluster admin kubeconfig is missing on control-plane node
+  ansible.builtin.fail:
+    msg: >-
+      {{ k8s_fetch_kubeconfig_remote_path }} is missing on {{ k8s_fetch_kubeconfig_master_host }}.
+      Run 21_kubeadm_init before 29_fetch_kubeconfig.
+  when: k8s_fetch_remote_kc_check.rc != 0
+
+- name: Render kubeconfig fetch script on controller
+  ansible.builtin.template:
+    src: fetch_admin_kubeconfig.sh.j2
+    dest: "{{ k8s_fetch_kubeconfig_fetch_script }}"
+    mode: '0700'
+
+- name: Fetch cluster admin kubeconfig from first control-plane node via SSH
+  ansible.builtin.shell: |
+    set -euo pipefail
+    dest="{{ controller_kubeconfig }}"
+    before_checksum=""
+    if [[ -f "${dest}" ]]; then
+      before_checksum="$(sha256sum "${dest}" | awk '{print $1}')"
+    fi
+    "{{ k8s_fetch_kubeconfig_fetch_script }}"
+    after_checksum="$(sha256sum "${dest}" | awk '{print $1}')"
+    if [[ "${before_checksum}" != "${after_checksum}" ]]; then
+      echo CHANGED
+    fi
+  args:
+    executable: /bin/bash
+  register: k8s_fetch_kubeconfig_run
+  changed_when: "'CHANGED' in k8s_fetch_kubeconfig_run.stdout"
+
+- name: Stat controller kubeconfig after fetch
+  ansible.builtin.stat:
+    path: "{{ controller_kubeconfig }}"
+  register: k8s_fetch_controller_kubeconfig_after
+
+- name: Assert controller kubeconfig is non-empty
+  ansible.builtin.assert:
+    that:
+      - k8s_fetch_controller_kubeconfig_after.stat.exists | default(false) | bool
+      - k8s_fetch_controller_kubeconfig_after.stat.size | default(0) | int > 0
+    fail_msg: >-
+      Controller kubeconfig {{ controller_kubeconfig }} is missing or empty after SSH fetch.
+
+- name: Verify API access via controller kubeconfig
+  ansible.builtin.command:
+    cmd: kubectl get nodes --no-headers
+  environment:
+    KUBECONFIG: "{{ controller_kubeconfig }}"
+  register: k8s_fetch_kubectl_nodes
+  changed_when: false
+  retries: "{{ k8s_fetch_kubeconfig_verify_retries }}"
+  delay: "{{ k8s_fetch_kubeconfig_verify_delay }}"
+  until: k8s_fetch_kubectl_nodes.rc == 0

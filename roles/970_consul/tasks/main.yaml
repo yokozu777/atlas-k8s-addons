@@ -1,0 +1,56 @@
+    - name: Remove consul Helm chart (absent)
+      when: consul_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: consul
+            namespace: "{{ vault_namespace }}"
+        helm_chart_absent_cluster_resources:
+          - api_version: admissionregistration.k8s.io/v1
+            kind: MutatingWebhookConfiguration
+            name: consul-connect-injector
+          - api_version: admissionregistration.k8s.io/v1
+            kind: ValidatingWebhookConfiguration
+            name: consul-connect-injector
+        helm_chart_absent_extra_manifests:
+          - "{{ k8s_manifests_dir }}/consul-servicemonitor.yaml"
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/consul.yaml"
+          - "{{ k8s_manifests_dir }}/consul-servicemonitor.yaml"
+    - name: Install/configure consul chart
+      when: consul_chart_state | default('present') == 'present'
+      block:
+        - name: Render consul helm values
+          ansible.builtin.template:
+            src: consul.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/consul.yaml"
+            mode: '0644'
+    
+        - name: Helming consul
+          ansible.builtin.command: >-
+            helm upgrade --install {{ item }}
+            --create-namespace
+            {{ consul_chart_version | helm_chart_version_args }}
+          loop:
+            - consul hashicorp/consul --namespace {{ vault_namespace }} -f {{ k8s_manifests_dir }}/consul.yaml
+    
+        - name: Wait for Consul server to be ready
+          ansible.builtin.shell: >
+            kubectl rollout status statefulset/consul-server
+            --namespace {{ vault_namespace }}
+            --timeout=300s
+          register: wait_consul
+          until: wait_consul.rc == 0
+          retries: 30
+          delay: 10
+          changed_when: false
+
+        - name: Render Consul ServiceMonitor
+          ansible.builtin.template:
+            src: consul-servicemonitor.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/consul-servicemonitor.yaml"
+            mode: '0644'
+
+        - name: Apply Consul ServiceMonitor
+          ansible.builtin.command: >-
+            kubectl --validate=false apply -f {{ k8s_manifests_dir }}/consul-servicemonitor.yaml

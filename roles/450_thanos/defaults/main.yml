@@ -1,0 +1,26 @@
+---
+# Operator catalog: group_vars/all/atlas-k8s-addons.yml
+thanos_chart_version: "0.32.0"
+thanos_chart_state: present
+thanos_objstore_secret: thanos-objstore
+thanos_obc_name: thanos-blocks
+thanos_storage_class: ceph-bucket
+# Rook OBC ConfigMap BUCKET_PORT is HTTP 80; Thanos must use RGW HTTPS (see 38 RGW TLS).
+thanos_s3_region: us-east-1
+thanos_s3_endpoint_port: 443
+thanos_s3_insecure: false
+thanos_s3_tls_insecure_skip_verify: true
+thanos_pvc_storage_class: ceph-block
+thanos_receive_replicas: 1
+thanos_query_replicas: 1
+thanos_store_replicas: 1
+thanos_receive_pvc_size: 10Gi
+thanos_store_pvc_size: 8Gi
+thanos_compactor_pvc_size: 10Gi
+thanos_compactor_retention_raw: 30d
+thanos_compactor_retention_5m: 60d
+thanos_compactor_retention_1h: 90d
+thanos_receive_tsdb_retention: 24h
+thanos_prometheus_retention: 24h
+thanos_query_http_url: "http://thanos-query.{{ monitoring_namespace }}.svc.{{ k8s_dns_domain }}:9090"
+thanos_receive_remote_write_url: "http://thanos-receive.{{ monitoring_namespace }}.svc.{{ k8s_dns_domain }}:10908/api/v1/receive"

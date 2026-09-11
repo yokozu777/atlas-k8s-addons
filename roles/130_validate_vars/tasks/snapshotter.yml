@@ -1,0 +1,102 @@
+---
+- name: Assert get_snapshotter is valid
+  ansible.builtin.assert:
+    that:
+      - get_snapshotter | default('github') in ['github', 'private-git', 'internal-nginx']
+    fail_msg: >-
+      get_snapshotter must be one of: github, private-git, internal-nginx
+      (got {{ get_snapshotter | default('github') }})
+
+- name: Assert setup_custom_content_nginx matches get_snapshotter
+  ansible.builtin.assert:
+    that:
+      - (setup_custom_content_nginx | default(false) | bool) == ((get_snapshotter == 'internal-nginx') and (setup_custom_nginx | default(false) | bool))
+    fail_msg: >-
+      setup_custom_content_nginx must equal
+      (get_snapshotter == 'internal-nginx' and setup_custom_nginx=true);
+      do not override manually in group_vars/all/atlas-k8s-addons.yml
+
+- name: Assert snapshotter_version is set
+  ansible.builtin.assert:
+    that:
+      - snapshotter_version | default('') | length > 0
+    fail_msg: snapshotter_version is required (e.g. 8.6.0 for git/kustomize tag v8.6.0)
+
+- name: Assert snapshotter_github_repo when mode is github
+  ansible.builtin.assert:
+    that:
+      - snapshotter_github_repo | default('') | length > 0
+    fail_msg: snapshotter_github_repo is required when get_snapshotter=github
+  when: get_snapshotter | default('github') == 'github'
+
+- name: Assert snapshotter_repo when mode is private-git
+  ansible.builtin.assert:
+    that:
+      - snapshotter_repo | default('') | length > 0
+    fail_msg: >-
+      snapshotter_repo is required when get_snapshotter=private-git
+      (fork URL, e.g. https://git.example.com/user/external-snapshotter.git)
+  when: get_snapshotter | default('github') == 'private-git'
+
+- name: Assert snapshotter_effective_repo when mode uses git clone
+  ansible.builtin.assert:
+    that:
+      - snapshotter_effective_repo | default('') | length > 0
+    fail_msg: >-
+      snapshotter_effective_repo must be set for get_snapshotter={{ get_snapshotter }}
+      (github → snapshotter_github_repo, private-git → snapshotter_repo)
+  when: get_snapshotter | default('github') in ['github', 'private-git']
+
+- name: Assert setup_custom_nginx when snapshotter mode is internal-nginx
+  ansible.builtin.assert:
+    that:
+      - setup_custom_nginx | default(false) | bool
+    fail_msg: get_snapshotter=internal-nginx requires setup_custom_nginx=true
+  when: get_snapshotter | default('github') == 'internal-nginx'
+
+- name: Assert custom nginx variables when snapshotter mode is internal-nginx
+  ansible.builtin.assert:
+    that:
+      - custom_nginx_ingress_domain | default('') | length > 0
+      - setup_stepca | default(false) | bool
+      - custom_nginx_tls_enabled | default(false) | bool
+      - snapshotter_kustomize_base_url | default('') | length > 0
+      - snapshotter_archive_url | default('') | length > 0
+      - custom_nginx_content | default([]) | length > 0
+    fail_msg: >-
+      custom_nginx_ingress_domain, snapshotter_kustomize_base_url, snapshotter_archive_url,
+      custom_nginx_content, setup_stepca=true and custom_nginx_tls_enabled=true are required
+      when get_snapshotter=internal-nginx and setup_custom_nginx=true
+  when:
+    - get_snapshotter | default('github') == 'internal-nginx'
+    - setup_custom_nginx | default(false) | bool
+
+- name: Assert registry nginx when custom content is shared with registry ingress
+  ansible.builtin.assert:
+    that:
+      - setup_registry_nginx | default(false) | bool
+    fail_msg: >-
+      get_snapshotter=internal-nginx with custom_nginx_shared_with_registry=true requires
+      setup_registry_nginx=true (custom static vhost is served via registry-nginx SNI)
+  when:
+    - get_snapshotter | default('github') == 'internal-nginx'
+    - setup_custom_nginx | default(false) | bool
+    - custom_nginx_shared_with_registry | default(true) | bool
+
+- name: Assert custom_nginx_content entries when snapshotter mode is internal-nginx
+  ansible.builtin.assert:
+    that:
+      - item.name | default('') | length > 0
+      - item.source_repo | default('') | length > 0
+      - item.version | default('') | length > 0
+      - item.dest_subdir | default('') | length > 0
+      - item.sync_paths | default([]) | length > 0
+    fail_msg: >-
+      Each custom_nginx_content entry requires name, source_repo, version, dest_subdir and sync_paths
+      (invalid entry: {{ item | default({}) }})
+  loop: "{{ custom_nginx_content | default([]) }}"
+  loop_control:
+    label: "{{ item.name | default('unknown') }}"
+  when:
+    - get_snapshotter | default('github') == 'internal-nginx'
+    - setup_custom_nginx | default(false) | bool

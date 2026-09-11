@@ -1,0 +1,74 @@
+---
+- name: Ensure controller workspace directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0700'
+  loop:
+    - "{{ controller_workspace }}"
+    - "{{ k8s_manifests_dir }}"
+    - "{{ controller_bin_dir }}"
+    - "{{ controller_helm_config_dir }}"
+    - "{{ controller_helm_cache_dir }}"
+    - "{{ controller_helm_cache_dir }}/repository"
+    - "{{ controller_staging_dir }}"
+
+- name: Check whether helm is available on controller PATH
+  ansible.builtin.shell: command -v helm
+  args:
+    executable: /bin/sh
+  register: controller_helm_lookup
+  changed_when: false
+  failed_when: false
+
+- name: Install helm on controller when missing
+  ansible.builtin.include_tasks: install_helm_bin.yaml
+  when: controller_helm_lookup.rc != 0
+
+- name: Assert helm is available on controller PATH
+  ansible.builtin.shell: command -v helm
+  args:
+    executable: /bin/sh
+  changed_when: false
+
+- name: Add each Helm repository
+  ansible.builtin.include_tasks:
+    file: repo.yaml
+    apply:
+      tags:
+        - 210_helm_bootstrap
+  loop: "{{ helm_repos }}"
+  loop_control:
+    loop_var: helm_repo
+
+- name: Ensure controller kubeconfig before platform helm operations
+  ansible.builtin.import_role:
+    name: 140_fetch_kubeconfig
+
+- name: Stat controller kubeconfig
+  ansible.builtin.stat:
+    path: "{{ controller_kubeconfig }}"
+  register: k8s_kubeconfig_stat
+
+- name: Assert controller kubeconfig is available for platform roles
+  ansible.builtin.assert:
+    that:
+      - k8s_kubeconfig_stat.stat.exists | default(false) | bool
+      - k8s_kubeconfig_stat.stat.size | default(0) | int > 0
+    fail_msg: >-
+      Kubeconfig {{ controller_kubeconfig }} is missing or empty on the Ansible controller.
+      Run atlas-k8s-core (29_fetch_kubeconfig) or ensure SSH access to the first control-plane
+      node so 140_fetch_kubeconfig can pull /etc/kubernetes/admin.conf.
+
+- name: Ensure platform namespaces exist
+  kubernetes.core.k8s:
+    kubeconfig: "{{ controller_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ item }}"
+  environment:
+    KUBECONFIG: "{{ controller_kubeconfig }}"
+  loop: "{{ k8s_platform_namespaces }}"

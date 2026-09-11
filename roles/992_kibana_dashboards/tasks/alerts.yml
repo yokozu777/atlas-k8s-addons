@@ -1,0 +1,146 @@
+---
+# Stack ES-query rules, no notification connector (actions: []).
+- name: Remove legacy cardinality silent-node rule
+  ansible.builtin.uri:
+    url: "https://{{ kibana_host }}/api/alerting/rule/atlas-logs-silent-node"
+    method: DELETE
+    headers:
+      kbn-xsrf: "true"
+    status_code:
+      - 200
+      - 204
+      - 404
+    url_username: "{{ k8s_users.kibana_dashboard }}"
+    url_password: "{{ k8s_secrets.kibana_elastic_password }}"
+    force_basic_auth: true
+    validate_certs: false
+
+# Quoted "{{ [n | int] }}" is valid YAML; to_json|from_json yields a native [int] for the Kibana API.
+- name: Resolve Atlas Kibana log alert thresholds
+  ansible.builtin.set_fact:
+    kibana_alert_threshold_ns: "{{ [kibana_alert_ns_error_threshold | int] | to_json | from_json }}"
+    kibana_alert_threshold_apiserver: "{{ [kibana_alert_apiserver_error_threshold | int] | to_json | from_json }}"
+    kibana_alert_threshold_falco: "{{ [kibana_alert_falco_threshold | int] | to_json | from_json }}"
+    kibana_alert_threshold_ceph: "{{ [kibana_alert_ceph_error_threshold | int] | to_json | from_json }}"
+
+- name: Build Atlas Kibana log alert definitions
+  ansible.builtin.set_fact:
+    kibana_log_alert_static_rules:
+      - id: atlas-logs-ns-error-spike
+        name: Atlas logs namespace error spike
+        schedule: 1m
+        params:
+          searchType: esQuery
+          index:
+            - kube-logs-*
+          timeField: "@timestamp"
+          esQuery: >-
+            {"query":{"bool":{"filter":[{"term":{"atlas_severity":"error"}}]}}}
+          size: 100
+          thresholdComparator: ">"
+          threshold: "{{ kibana_alert_threshold_ns }}"
+          timeWindowSize: 5
+          timeWindowUnit: m
+          aggType: count
+          groupBy: top
+          termField: kubernetes.namespace_name
+          termSize: 50
+          excludeHitsFromPreviousRun: false
+      - id: atlas-logs-apiserver-errors
+        name: Atlas logs apiserver errors
+        schedule: 1m
+        params:
+          searchType: esQuery
+          index:
+            - kube-logs-*
+          timeField: "@timestamp"
+          esQuery: >-
+            {"query":{"bool":{"filter":[{"terms":{"atlas_severity":["error","warn"]}},{"term":{"kubernetes.container_name":"kube-apiserver"}}]}}}
+          size: 100
+          thresholdComparator: ">"
+          threshold: "{{ kibana_alert_threshold_apiserver }}"
+          timeWindowSize: 5
+          timeWindowUnit: m
+          aggType: count
+          groupBy: all
+          excludeHitsFromPreviousRun: false
+      - id: atlas-logs-falco
+        name: Atlas logs Falco
+        schedule: 1m
+        params:
+          searchType: esQuery
+          index:
+            - kube-logs-*
+          timeField: "@timestamp"
+          esQuery: >-
+            {"query":{"bool":{"filter":[{"terms":{"atlas_severity":["error","warn"]}},{"term":{"kubernetes.namespace_name":"falco"}},{"exists":{"field":"log_processed.rule"}}]}}}
+          size: 100
+          thresholdComparator: ">"
+          threshold: "{{ kibana_alert_threshold_falco }}"
+          timeWindowSize: 5
+          timeWindowUnit: m
+          aggType: count
+          groupBy: all
+          excludeHitsFromPreviousRun: false
+      - id: atlas-logs-ceph-errors
+        name: Atlas logs Ceph errors
+        schedule: 1m
+        params:
+          searchType: esQuery
+          index:
+            - kube-logs-*
+          timeField: "@timestamp"
+          esQuery: >-
+            {"query":{"bool":{"filter":[{"term":{"atlas_severity":"error"}},{"terms":{"kubernetes.namespace_name":["rook-ceph","rook-ceph-cluster"]}}]}}}
+          size: 100
+          thresholdComparator: ">"
+          threshold: "{{ kibana_alert_threshold_ceph }}"
+          timeWindowSize: 5
+          timeWindowUnit: m
+          aggType: count
+          groupBy: all
+          excludeHitsFromPreviousRun: false
+
+- name: Initialize per-node silent-node alert list
+  ansible.builtin.set_fact:
+    kibana_silent_node_alert_rules: []
+
+- name: Build per-node silent-node alert definitions
+  ansible.builtin.set_fact:
+    kibana_silent_node_alert_rules: "{{ kibana_silent_node_alert_rules + [kibana_silent_node_rule] }}"
+  vars:
+    kibana_silent_node_name: "{{ hostvars[node_host].hostname | default(node_host) }}"
+    kibana_silent_node_slug: "{{ kibana_silent_node_name | regex_replace('[^a-zA-Z0-9_-]', '-') | lower }}"
+    kibana_silent_node_rule:
+      id: "atlas-logs-silent-node-{{ kibana_silent_node_slug }}"
+      name: "Atlas logs silent node {{ kibana_silent_node_name }}"
+      schedule: 5m
+      params:
+        searchType: esQuery
+        index:
+          - host-logs-*
+        timeField: "@timestamp"
+        esQuery: "{{ {'query': {'bool': {'filter': [{'term': {'atlas_heartbeat': 'true'}}, {'term': {'_HOSTNAME': kibana_silent_node_name}}]}}} | to_json }}"
+        size: 100
+        thresholdComparator: "<"
+        threshold:
+          - 1
+        timeWindowSize: 15
+        timeWindowUnit: m
+        aggType: count
+        groupBy: all
+        excludeHitsFromPreviousRun: false
+  loop: "{{ ((groups[k8s_master_hosts | default('k8s_masters')] | default([])) + (groups[k8s_worker_hosts | default('k8s_workers')] | default([]))) | unique }}"
+  loop_control:
+    loop_var: node_host
+
+- name: Combine Atlas Kibana log alert definitions
+  ansible.builtin.set_fact:
+    kibana_log_alert_rules: "{{ kibana_log_alert_static_rules + kibana_silent_node_alert_rules }}"
+
+- name: Ensure Atlas Kibana log alert
+  ansible.builtin.include_tasks: ensure_alert.yml
+  loop: "{{ kibana_log_alert_rules }}"
+  loop_control:
+    loop_var: kibana_alert_rule
+    label: "{{ kibana_alert_rule.id }}"

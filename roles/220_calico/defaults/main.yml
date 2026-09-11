@@ -1,0 +1,4 @@
+---
+calico_linux_dataplane: BPF
+calico_bgp: Disabled
+calico_ip_pool_encapsulation: VXLANCrossSubnet

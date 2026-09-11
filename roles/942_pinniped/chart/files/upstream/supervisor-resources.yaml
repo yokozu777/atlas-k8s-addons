@@ -1,0 +1,438 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pinniped-supervisor
+  labels:
+    app: pinniped-supervisor
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pinniped-supervisor
+  namespace: pinniped-supervisor
+  labels:
+    app: pinniped-supervisor
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pinniped-supervisor-static-config
+  namespace: pinniped-supervisor
+  labels:
+    app: pinniped-supervisor
+data:
+  pinniped.yaml: |
+    apiGroupSuffix: pinniped.dev
+    names:
+      defaultTLSCertificateSecret: pinniped-supervisor-default-tls-certificate
+      apiService: pinniped-supervisor-api
+    labels:
+      app: pinniped-supervisor
+    tls:
+      onedottwo:
+        allowedCiphers: []
+    audit:
+      logUsernamesAndGroups: disabled
+      logInternalPaths: disabled
+    aggregatedAPIServerDisableAdmissionPlugins: []
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pinniped-supervisor
+  namespace: pinniped-supervisor
+  labels:
+    app: pinniped-supervisor
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: pinniped-supervisor
+  template:
+    metadata:
+      labels:
+        app: pinniped-supervisor
+        deployment.pinniped.dev: supervisor
+    spec:
+      securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
+      serviceAccountName: pinniped-supervisor
+      containers:
+      - name: pinniped-supervisor
+        image: ghcr.io/vmware/pinniped/pinniped-server:v0.47.0@sha256:3a46e1ea8b874281698dd27e60d6f9b46738cb10483baa9dc78a0023cc17e29d
+        imagePullPolicy: IfNotPresent
+        command:
+        - pinniped-supervisor
+        - /etc/podinfo
+        - /etc/config/pinniped.yaml
+        securityContext:
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 1000m
+            memory: 128Mi
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/config
+          readOnly: true
+        - name: podinfo
+          mountPath: /etc/podinfo
+          readOnly: true
+        ports:
+        - containerPort: 8443
+          protocol: TCP
+        env: []
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8443
+            scheme: HTTPS
+          initialDelaySeconds: 2
+          timeoutSeconds: 15
+          periodSeconds: 10
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8443
+            scheme: HTTPS
+          initialDelaySeconds: 2
+          timeoutSeconds: 3
+          periodSeconds: 10
+          failureThreshold: 3
+      volumes:
+      - name: config-volume
+        configMap:
+          name: pinniped-supervisor-static-config
+      - name: podinfo
+        downwardAPI:
+          items:
+          - path: labels
+            fieldRef:
+              fieldPath: metadata.labels
+          - path: namespace
+            fieldRef:
+              fieldPath: metadata.namespace
+          - path: name
+            fieldRef:
+              fieldPath: metadata.name
+      tolerations:
+      - key: kubernetes.io/arch
+        effect: NoSchedule
+        operator: Equal
+        value: amd64
+      - key: kubernetes.io/arch
+        effect: NoSchedule
+        operator: Equal
+        value: arm64
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 50
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  deployment.pinniped.dev: supervisor
+              topologyKey: kubernetes.io/hostname
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pinniped-supervisor-api
+  namespace: pinniped-supervisor
+  labels:
+    app: pinniped-supervisor
+  annotations:
+    kapp.k14s.io/disable-default-label-scoping-rules: ""
+spec:
+  type: ClusterIP
+  selector:
+    deployment.pinniped.dev: supervisor
+  ports:
+  - protocol: TCP
+    port: 443
+    targetPort: 10250
+---
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1alpha1.clientsecret.supervisor.pinniped.dev
+  labels:
+    app: pinniped-supervisor
+spec:
+  version: v1alpha1
+  group: clientsecret.supervisor.pinniped.dev
+  groupPriorityMinimum: 9900
+  versionPriority: 15
+  service:
+    name: pinniped-supervisor-api
+    namespace: pinniped-supervisor
+    port: 443
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pinniped-supervisor
+  namespace: pinniped-supervisor
+  labels:
+    app: pinniped-supervisor
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - config.supervisor.pinniped.dev
+  resources:
+  - federationdomains
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - config.supervisor.pinniped.dev
+  resources:
+  - federationdomains/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - config.supervisor.pinniped.dev
+  resources:
+  - oidcclients
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - config.supervisor.pinniped.dev
+  resources:
+  - oidcclients/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - idp.supervisor.pinniped.dev
+  resources:
+  - oidcidentityproviders
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - idp.supervisor.pinniped.dev
+  resources:
+  - oidcidentityproviders/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - idp.supervisor.pinniped.dev
+  resources:
+  - ldapidentityproviders
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - idp.supervisor.pinniped.dev
+  resources:
+  - ldapidentityproviders/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - idp.supervisor.pinniped.dev
+  resources:
+  - activedirectoryidentityproviders
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - idp.supervisor.pinniped.dev
+  resources:
+  - activedirectoryidentityproviders/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - idp.supervisor.pinniped.dev
+  resources:
+  - githubidentityproviders
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - idp.supervisor.pinniped.dev
+  resources:
+  - githubidentityproviders/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+- apiGroups:
+  - apps
+  resources:
+  - replicasets
+  - deployments
+  verbs:
+  - get
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - get
+  - update
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: pinniped-supervisor
+  namespace: pinniped-supervisor
+  labels:
+    app: pinniped-supervisor
+subjects:
+- kind: ServiceAccount
+  name: pinniped-supervisor
+  namespace: pinniped-supervisor
+roleRef:
+  kind: Role
+  name: pinniped-supervisor
+  apiGroup: rbac.authorization.k8s.io
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: pinniped-supervisor-extension-apiserver-authentication-reader
+  namespace: kube-system
+  labels:
+    app: pinniped-supervisor
+subjects:
+- kind: ServiceAccount
+  name: pinniped-supervisor
+  namespace: pinniped-supervisor
+roleRef:
+  kind: Role
+  name: extension-apiserver-authentication-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: pinniped-supervisor
+  labels:
+    app: pinniped-supervisor
+subjects:
+- kind: ServiceAccount
+  name: pinniped-supervisor
+  namespace: pinniped-supervisor
+roleRef:
+  kind: ClusterRole
+  name: system:auth-delegator
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pinniped-supervisor-aggregated-api-server
+  labels:
+    app: pinniped-supervisor
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apiregistration.k8s.io
+  resources:
+  - apiservices
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - admissionregistration.k8s.io
+  resources:
+  - validatingwebhookconfigurations
+  - mutatingwebhookconfigurations
+  - validatingadmissionpolicies
+  - validatingadmissionpolicybindings
+  - mutatingadmissionpolicies
+  - mutatingadmissionpolicybindings
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - flowcontrol.apiserver.k8s.io
+  resources:
+  - flowschemas
+  - prioritylevelconfigurations
+  verbs:
+  - get
+  - list
+  - watch
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: pinniped-supervisor-aggregated-api-server
+  labels:
+    app: pinniped-supervisor
+subjects:
+- kind: ServiceAccount
+  name: pinniped-supervisor
+  namespace: pinniped-supervisor
+roleRef:
+  kind: ClusterRole
+  name: pinniped-supervisor-aggregated-api-server
+  apiGroup: rbac.authorization.k8s.io

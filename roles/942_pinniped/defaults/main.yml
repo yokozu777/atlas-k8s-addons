@@ -1,0 +1,21 @@
+---
+# Operator catalog: group_vars/all/atlas-k8s-addons.yml
+pinniped_chart_state: present
+pinniped_chart_version: ""
+pinniped_version: v0.47.0
+pinniped_namespace: pinniped
+pinniped_host: "pinniped.{{ k8s_cluster_domain }}"
+pinniped_supervisor_service: pinniped-supervisor
+pinniped_https_secret: pinniped-supervisor-https
+pinniped_oidc_client_id: pinniped-supervisor
+pinniped_oidc_client_secret_name: pinniped-supervisor-oidc-client
+pinniped_idp_name: keycloak
+pinniped_jwtauthenticator: supervisor
+pinniped_kubeconfig: "{{ controller_kubeconfig }}.pinniped"
+pinniped_login_host: "pinniped-login.{{ k8s_cluster_domain }}"
+pinniped_login_service: pinniped-login
+pinniped_login_kubeconfig_secret: pinniped-login-kubeconfig
+pinniped_login_image: nginx:1.27-alpine
+k8s_oidc_group: k8s-admins
+k8s_oidc_clusterrolebinding: oidc-k8s-admins
+

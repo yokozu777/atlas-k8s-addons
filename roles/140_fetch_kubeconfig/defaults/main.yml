@@ -1,0 +1,18 @@
+---
+# Keep 140_fetch_kubeconfig tasks/fetch.yaml and templates/fetch_admin_kubeconfig.sh.j2
+# Keep in sync with atlas-k8s-core roles/29_fetch_kubeconfig (orchestrator parity tests).
+# Inventory group targeting (must match playbook / group_vars/all/atlas-k8s-addons.yml).
+k8s_master_hosts: k8s_masters
+
+k8s_fetch_kubeconfig_remote_path: /etc/kubernetes/admin.conf
+k8s_fetch_kubeconfig_master_host: "{{ k8s_control_plane_master_host }}"
+k8s_fetch_kubeconfig_verify_retries: 30
+k8s_fetch_kubeconfig_verify_delay: 5
+
+# SSH fetch from Ansible controller (no remote Python required).
+k8s_fetch_kubeconfig_ssh_user: "{{ k8s_control_plane_ssh_user }}"
+k8s_fetch_kubeconfig_ssh_target: "{{ k8s_control_plane_ssh_target }}"
+k8s_fetch_kubeconfig_ssh_private_key_file: "{{ k8s_control_plane_ssh_private_key_file }}"
+k8s_fetch_kubeconfig_ssh_extra_args: "{{ k8s_control_plane_ssh_extra_args }}"
+k8s_fetch_kubeconfig_scripts_dir: "{{ k8s_control_plane_scripts_dir }}"
+k8s_fetch_kubeconfig_fetch_script: "{{ k8s_control_plane_scripts_dir }}/fetch_admin_kubeconfig.sh"

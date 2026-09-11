@@ -1,0 +1,105 @@
+    - name: Remove CloudNativePG Cluster before operator uninstall
+      when: cnpg_chart_state | default('present') == 'absent'
+      ansible.builtin.command: >-
+        kubectl delete cluster.postgresql.cnpg.io {{ cnpg_cluster_name }}
+        -n {{ cnpg_cluster_namespace }}
+        --ignore-not-found --wait=true --timeout=600s
+      register: cnpg_cluster_delete
+      changed_when: false
+      failed_when: >-
+        cnpg_cluster_delete.rc != 0
+        and 'NotFound' not in (cnpg_cluster_delete.stderr | default(''))
+        and 'not found' not in (cnpg_cluster_delete.stderr | default('') | lower)
+        and "doesn't have a resource type" not in (cnpg_cluster_delete.stderr | default(''))
+
+    - name: Remove CloudNativePG Helm chart (absent)
+      when: cnpg_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: cnpg
+            namespace: "{{ cnpg_operator_namespace }}"
+        helm_chart_absent_delete_namespace: true
+        helm_chart_absent_namespaces:
+          - "{{ cnpg_cluster_namespace }}"
+          - "{{ cnpg_operator_namespace }}"
+        helm_chart_absent_extra_manifests:
+          - "{{ k8s_manifests_dir }}/cnpg-cluster.yaml"
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/cnpg-operator.yaml"
+          - "{{ k8s_manifests_dir }}/cnpg-cluster.yaml"
+    - name: Install/configure CloudNativePG
+      when: cnpg_chart_state | default('present') == 'present'
+      block:
+        - name: Render CloudNativePG operator helm values
+          ansible.builtin.template:
+            src: cnpg-operator.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/cnpg-operator.yaml"
+            mode: '0644'
+
+        - name: Helming CloudNativePG operator
+          ansible.builtin.command: >-
+            helm upgrade --install cnpg cnpg/cloudnative-pg
+            --namespace {{ cnpg_operator_namespace }}
+            --create-namespace
+            -f {{ k8s_manifests_dir }}/cnpg-operator.yaml
+            {{ cnpg_chart_version | helm_chart_version_args }}
+          register: cnpg_helm
+          changed_when: >-
+            'has been upgraded' in cnpg_helm.stdout
+            or 'has been installed' in cnpg_helm.stdout
+
+        - name: Wait for CloudNativePG operator Deployment
+          ansible.builtin.command: >-
+            kubectl rollout status deployment/cnpg-cloudnative-pg
+            -n {{ cnpg_operator_namespace }} --timeout=300s
+          register: wait_cnpg_operator
+          until: wait_cnpg_operator.rc == 0
+          retries: 10
+          delay: 10
+          changed_when: false
+
+        - name: Wait for CloudNativePG Cluster CRD
+          ansible.builtin.command: >-
+            kubectl wait --for=condition=established
+            crd/clusters.postgresql.cnpg.io --timeout=120s
+          register: wait_cnpg_crd
+          until: wait_cnpg_crd.rc == 0
+          retries: 10
+          delay: 6
+          changed_when: false
+
+        - name: Ensure CloudNativePG cluster namespace exists
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: "{{ cnpg_cluster_namespace }}"
+
+        - name: Render CloudNativePG Cluster manifest
+          ansible.builtin.template:
+            src: cnpg-cluster.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/cnpg-cluster.yaml"
+            mode: '0644'
+
+        - name: Apply CloudNativePG Cluster
+          ansible.builtin.command: >-
+            kubectl --validate=false apply -f {{ k8s_manifests_dir }}/cnpg-cluster.yaml
+          register: cnpg_cluster_apply
+          until: cnpg_cluster_apply.rc == 0
+          retries: 10
+          delay: 6
+          changed_when: "'configured' in cnpg_cluster_apply.stdout or 'created' in cnpg_cluster_apply.stdout"
+
+        - name: Wait for CloudNativePG Cluster Ready
+          ansible.builtin.command: >-
+            kubectl wait --for=condition=Ready
+            cluster.postgresql.cnpg.io/{{ cnpg_cluster_name }}
+            -n {{ cnpg_cluster_namespace }} --timeout=600s
+          register: wait_cnpg_cluster
+          until: wait_cnpg_cluster.rc == 0
+          retries: 10
+          delay: 15
+          changed_when: false

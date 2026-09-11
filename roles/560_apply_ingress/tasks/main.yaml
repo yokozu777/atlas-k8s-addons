@@ -1,0 +1,98 @@
+---
+- name: Reset active ingress app list
+  ansible.builtin.set_fact:
+    k8s_ingress_apps_active: []
+
+- name: Select ingress apps whose charts are present
+  ansible.builtin.set_fact:
+    k8s_ingress_apps_active: "{{ k8s_ingress_apps_active + [item] }}"
+  loop: "{{ k8s_ingress_apps | default([]) }}"
+  when: >-
+    (item.chart_state_var | default('') | length == 0)
+    or (lookup('vars', item.chart_state_var, default='present') | default('present') == 'present')
+
+- name: Ensure namespaces for gateway routes
+  kubernetes.core.k8s:
+    state: present
+    api_version: v1
+    kind: Namespace
+    name: "{{ item }}"
+  loop: "{{ k8s_ingress_apps_active | default([]) | map(attribute='namespace') | unique | list }}"
+
+- name: Render gateway route manifests
+  ansible.builtin.template:
+    src: gateway-routes.yaml.j2
+    dest: "{{ k8s_manifests_dir }}/gateway-routes.yaml"
+    mode: "0644"
+
+- name: Apply gateway route manifests
+  ansible.builtin.command: >-
+    kubectl --validate=false apply -f {{ k8s_manifests_dir }}/gateway-routes.yaml
+
+- name: Remove ClientTrafficPolicy bufferLimit leftover
+  ansible.builtin.command: >-
+    kubectl delete clienttrafficpolicy {{ envoy_gateway_gateway_name }}-buffer
+    -n {{ envoy_gateway_namespace }}
+    --ignore-not-found
+  changed_when: false
+
+- name: Remove Rook dashboard Backend leftover
+  ansible.builtin.command: >-
+    kubectl delete backend rook-ceph-mgr-dashboard
+    -n {{ rook_cluster_namespace }}
+    --ignore-not-found
+  changed_when: false
+
+- name: Wait for wildcard Certificate Ready
+  ansible.builtin.command: >-
+    kubectl wait --timeout=10m
+    -n {{ envoy_gateway_namespace }}
+    certificate/{{ envoy_gateway_wildcard_secret }}
+    --for=condition=Ready
+  register: wait_eg_wildcard_cert
+  until: wait_eg_wildcard_cert.rc == 0
+  retries: 12
+  delay: 10
+  changed_when: false
+
+- name: Wait for Envoy Gateway Programmed
+  ansible.builtin.command: >-
+    kubectl wait --timeout=5m
+    -n {{ envoy_gateway_namespace }}
+    gateway/{{ envoy_gateway_gateway_name }}
+    --for=condition=Programmed
+  register: wait_eg_gateway
+  until: wait_eg_gateway.rc == 0
+  retries: 10
+  delay: 6
+  changed_when: false
+
+- name: Wait for Envoy Gateway LoadBalancer IP
+  ansible.builtin.command: >-
+    kubectl get gateway {{ envoy_gateway_gateway_name }}
+    -n {{ envoy_gateway_namespace }}
+    -o jsonpath='{.status.addresses[0].value}'
+  register: wait_eg_lb_ip
+  until: wait_eg_lb_ip.stdout | trim == ingress_lb_ip
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Wait for EnvoyPatchPolicy max-headers Programmed
+  ansible.builtin.shell: >
+    kubectl get envoypatchpolicy {{ envoy_gateway_gateway_name }}-max-headers
+    -n {{ envoy_gateway_namespace }}
+    -o jsonpath='{range .status.ancestors[*].conditions[?(@.type=="Programmed")]}{.status}{"|"}{.message}{"\n"}{end}'
+  register: wait_eg_patch
+  until: (wait_eg_patch.stdout | trim).split('|') | first == 'True'
+  retries: 20
+  delay: 6
+  failed_when: false
+  changed_when: false
+
+- name: Fail if EnvoyPatchPolicy max-headers is not Programmed
+  ansible.builtin.fail:
+    msg: >-
+      EnvoyPatchPolicy {{ envoy_gateway_gateway_name }}-max-headers not Programmed:
+      {{ wait_eg_patch.stdout | trim }}
+  when: (wait_eg_patch.stdout | trim).split('|') | first != 'True'

@@ -1,0 +1,7 @@
+---
+- name: Install istioctl binary on debug tooling host
+  ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/install_istioctl_binary.yaml"
+  vars:
+    install_istioctl_dest: "{{ debug_tooling_install_dir }}/istioctl"
+    install_istioctl_staging_dir: "{{ debug_tooling_staging_dir }}"
+    install_istioctl_version: "{{ istio_version }}"

@@ -1,0 +1,30 @@
+    - name: Remove {{ argo_rollouts_namespace }} Helm chart (absent)
+      when: argo_rollouts_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: argo-rollouts
+            namespace: "{{ argo_rollouts_namespace }}"
+        helm_chart_absent_delete_namespace: true
+        helm_chart_absent_namespaces:
+          - "{{ argo_rollouts_namespace }}"
+        helm_chart_absent_ingress_app_names:
+          - argo-rollouts-dashboard
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/argo-rollouts.yaml"
+
+    - name: Install/configure argo-rollouts chart
+      when: argo_rollouts_chart_state | default('present') == 'present'
+      block:
+        - name: Render argo-rollouts helm values
+          ansible.builtin.template:
+            src: argo-rollouts.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/argo-rollouts.yaml"
+            mode: '0644'
+
+        - name: Helming {{ argo_rollouts_namespace }}
+          ansible.builtin.command: >-
+            helm upgrade --install argo-rollouts argo/argo-rollouts
+            --namespace {{ argo_rollouts_namespace }} --create-namespace
+            -f {{ k8s_manifests_dir }}/argo-rollouts.yaml
+            {{ argo_rollouts_chart_version | helm_chart_version_args }}

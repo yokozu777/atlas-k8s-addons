@@ -1,0 +1,144 @@
+    - name: Wait for Calico FelixConfiguration
+      kubernetes.core.k8s_info:
+        api_version: projectcalico.org/v3
+        kind: FelixConfiguration
+        name: default
+      register: calico_felix_config
+      until: calico_felix_config.resources | length > 0
+      retries: 60
+      delay: 10
+
+    - name: Wait for Calico Installation
+      kubernetes.core.k8s_info:
+        api_version: operator.tigera.io/v1
+        kind: Installation
+        name: default
+      register: calico_installation
+      until: calico_installation.resources | length > 0
+      retries: 60
+      delay: 10
+
+    - name: Wait for Calico KubeControllersConfiguration
+      kubernetes.core.k8s_info:
+        api_version: projectcalico.org/v3
+        kind: KubeControllersConfiguration
+        name: default
+      register: calico_kube_controllers_config
+      until: calico_kube_controllers_config.resources | length > 0
+      retries: 60
+      delay: 10
+
+    - name: Determine whether Calico metrics settings match target values
+      ansible.builtin.set_fact:
+        calico_felix_metrics_configured: >-
+          {{
+            (calico_felix_config.resources[0].spec.prometheusMetricsEnabled | default(false) | bool)
+            and (calico_felix_config.resources[0].spec.prometheusMetricsPort | default(0) | int
+                 == calico_felix_metrics_port | int)
+          }}
+        calico_typha_metrics_configured: >-
+          {{
+            calico_installation.resources[0].spec.typhaMetricsPort | default(0) | int
+            == calico_typha_metrics_port | int
+          }}
+        calico_kube_controllers_metrics_configured: >-
+          {{
+            calico_kube_controllers_config.resources[0].spec.prometheusMetricsPort | default(0) | int
+            == calico_kube_controllers_metrics_port | int
+          }}
+
+    - name: Calico Prometheus metrics already configured
+      ansible.builtin.debug:
+        msg: >-
+          Felix (enabled + port {{ calico_felix_metrics_port }}),
+          Typha (port {{ calico_typha_metrics_port }}),
+          kube-controllers (port {{ calico_kube_controllers_metrics_port }})
+          already match target values; skipping patch and rollout.
+      when: >-
+        calico_felix_metrics_configured
+        and calico_typha_metrics_configured
+        and calico_kube_controllers_metrics_configured
+
+    - name: Patch FelixConfiguration for Prometheus metrics
+      kubernetes.core.k8s:
+        api_version: projectcalico.org/v3
+        kind: FelixConfiguration
+        name: default
+        merge_type: merge
+        definition:
+          spec:
+            prometheusMetricsEnabled: true
+            prometheusMetricsPort: "{{ calico_felix_metrics_port | int }}"
+      when: not calico_felix_metrics_configured | bool
+
+    - name: Patch Installation typha metrics port
+      kubernetes.core.k8s:
+        api_version: operator.tigera.io/v1
+        kind: Installation
+        name: default
+        merge_type: merge
+        definition:
+          spec:
+            typhaMetricsPort: "{{ calico_typha_metrics_port | int }}"
+      when: not calico_typha_metrics_configured | bool
+
+    - name: Patch KubeControllersConfiguration for Prometheus metrics
+      kubernetes.core.k8s:
+        api_version: projectcalico.org/v3
+        kind: KubeControllersConfiguration
+        name: default
+        merge_type: merge
+        definition:
+          spec:
+            prometheusMetricsPort: "{{ calico_kube_controllers_metrics_port | int }}"
+      when: not calico_kube_controllers_metrics_configured | bool
+
+    - name: Restart calico-node after metrics configuration change
+      ansible.builtin.command:
+        cmd: kubectl rollout restart daemonset/calico-node -n {{ calico_system_namespace }}
+      when: >-
+        not calico_felix_metrics_configured | bool
+        or not calico_typha_metrics_configured | bool
+      changed_when: true
+
+    - name: Wait for calico-node rollout after metrics configuration change
+      ansible.builtin.command:
+        cmd: kubectl rollout status daemonset/calico-node -n {{ calico_system_namespace }} --timeout=300s
+      when: >-
+        not calico_felix_metrics_configured | bool
+        or not calico_typha_metrics_configured | bool
+      changed_when: false
+
+    - name: Restart calico-kube-controllers after metrics configuration change
+      ansible.builtin.command:
+        cmd: kubectl rollout restart deployment/calico-kube-controllers -n {{ calico_system_namespace }}
+      when: not calico_kube_controllers_metrics_configured | bool
+      changed_when: true
+
+    - name: Wait for calico-kube-controllers rollout after metrics configuration change
+      ansible.builtin.command:
+        cmd: kubectl rollout status deployment/calico-kube-controllers -n {{ calico_system_namespace }} --timeout=180s
+      when: not calico_kube_controllers_metrics_configured | bool
+      changed_when: false
+
+    - name: Render Calico metrics manifests
+      ansible.builtin.template:
+        src: calico-metrics.yaml.j2
+        dest: "{{ k8s_manifests_dir }}/calico-metrics.yaml"
+        mode: '0644'
+
+    - name: Apply Calico metrics manifests
+      ansible.builtin.command:
+        cmd: kubectl apply -f {{ k8s_manifests_dir }}/calico-metrics.yaml
+      changed_when: true
+
+    - name: Remove legacy Calico ServiceMonitor
+      ansible.builtin.command: >-
+        kubectl delete servicemonitor calico -n {{ calico_system_namespace }} --ignore-not-found
+      changed_when: false
+
+    - name: Restart prometheus-operator to reconcile Calico ServiceMonitors
+      ansible.builtin.command: >-
+        kubectl rollout restart deployment/prometheus-kube-prometheus-operator
+        -n {{ monitoring_namespace }}
+      changed_when: true

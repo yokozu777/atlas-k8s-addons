@@ -1,0 +1,31 @@
+---
+- name: "unseal: Run vault init and unseal script"
+  when: vault_chart_state | default('present') == 'present'
+  ansible.builtin.shell: bash {{ k8s_manifests_dir }}/vault.sh
+  environment:
+    KUBECONFIG: "{{ k8s_kubeconfig }}"
+  register: vault_init_unseal
+  changed_when: >-
+    'Initializing Vault' in (vault_init_unseal.stdout | default(''))
+    or 'Unsealing vault-' in (vault_init_unseal.stdout | default(''))
+    or 'init output saved' in (vault_init_unseal.stdout | default(''))
+
+- name: Load Internal CA for Vault OIDC discovery
+  when: vault_chart_state | default('present') == 'present'
+  ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/download_internal_ca.yaml"
+  vars:
+    download_internal_ca_dest: "{{ k8s_manifests_dir }}/vault-oidc-ca.pem"
+
+- name: Bootstrap Vault admin user, ESO kubernetes auth, and Keycloak OIDC
+  when: vault_chart_state | default('present') == 'present'
+  ansible.builtin.command: bash {{ k8s_manifests_dir }}/vault-bootstrap.sh
+  environment:
+    KUBECONFIG: "{{ k8s_kubeconfig }}"
+    VAULT_ADMIN_USER: "{{ vault_admin }}"
+    VAULT_ADMIN_PASSWORD: "{{ vault_admin_password }}"
+    VAULT_OIDC_CLIENT_SECRET: "{{ vault_oidc_client_secret }}"
+    VAULT_OIDC_CA_FILE: "{{ k8s_manifests_dir }}/vault-oidc-ca.pem"
+  register: vault_bootstrap
+  no_log: true
+  changed_when: >-
+    'Vault bootstrap completed successfully.' in (vault_bootstrap.stdout | default(''))

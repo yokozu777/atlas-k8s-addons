@@ -1,0 +1,37 @@
+---
+- name: Put Elasticsearch S3 snapshot repository
+  ansible.builtin.include_tasks: elasticsearch_put.yml
+  vars:
+    elasticsearch_put_title: PUT _snapshot/{{ elasticsearch_snapshot_repo_name }}
+    elasticsearch_put_url: "https://{{ elasticsearch_host }}/_snapshot/{{ elasticsearch_snapshot_repo_name }}?verify=false"
+    elasticsearch_put_retries: 30
+    elasticsearch_put_delay: 10
+    elasticsearch_put_body:
+      type: s3
+      settings:
+        bucket: "{{ elasticsearch_s3_bucket }}"
+        client: default
+        endpoint: "{{ elasticsearch_s3_client_endpoint }}"
+        protocol: "{{ elasticsearch_s3_client_protocol }}"
+        path_style_access: true
+        region: "{{ elasticsearch_s3_region | default('us-east-1') }}"
+
+- name: Put SLM policy atlas-logs
+  ansible.builtin.include_tasks: elasticsearch_put.yml
+  vars:
+    elasticsearch_put_title: PUT _slm/policy/{{ elasticsearch_snapshot_repo_name }}
+    elasticsearch_put_url: "https://{{ elasticsearch_host }}/_slm/policy/{{ elasticsearch_snapshot_repo_name }}"
+    elasticsearch_put_body:
+      schedule: "{{ elasticsearch_slm_schedule }}"
+      name: "<{{ elasticsearch_snapshot_repo_name }}-{now/d}>"
+      repository: "{{ elasticsearch_snapshot_repo_name }}"
+      config:
+        indices:
+          - kube-logs-*
+          - host-logs-*
+        ignore_unavailable: true
+        include_global_state: false
+      retention:
+        expire_after: "{{ elasticsearch_slm_expire_after }}"
+        min_count: 1
+        max_count: 50

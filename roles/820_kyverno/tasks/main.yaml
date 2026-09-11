@@ -1,0 +1,73 @@
+    - name: Remove {{ kyverno_namespace }} Helm chart (absent)
+      when: kyverno_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: kyverno
+            namespace: "{{ kyverno_namespace }}"
+        helm_chart_absent_delete_namespace: true
+        helm_chart_absent_namespaces:
+          - "{{ kyverno_namespace }}"
+        helm_chart_absent_crd_patterns:
+          - kyverno.io
+        helm_chart_absent_cluster_resources:
+          - api_version: admissionregistration.k8s.io/v1
+            kind: ValidatingWebhookConfiguration
+            name: kyverno-policy-validating-webhook-cfg
+          - api_version: admissionregistration.k8s.io/v1
+            kind: ValidatingWebhookConfiguration
+            name: kyverno-resource-validating-webhook-cfg
+          - api_version: admissionregistration.k8s.io/v1
+            kind: ValidatingWebhookConfiguration
+            name: kyverno-exception-validating-webhook-cfg
+          - api_version: admissionregistration.k8s.io/v1
+            kind: ValidatingWebhookConfiguration
+            name: kyverno-cel-exception-validating-webhook-cfg
+          - api_version: admissionregistration.k8s.io/v1
+            kind: ValidatingWebhookConfiguration
+            name: kyverno-global-context-validating-webhook-cfg
+          - api_version: admissionregistration.k8s.io/v1
+            kind: ValidatingWebhookConfiguration
+            name: kyverno-cleanup-validating-webhook-cfg
+          - api_version: admissionregistration.k8s.io/v1
+            kind: ValidatingWebhookConfiguration
+            name: kyverno-ttl-validating-webhook-cfg
+          - api_version: admissionregistration.k8s.io/v1
+            kind: MutatingWebhookConfiguration
+            name: kyverno-policy-mutating-webhook-cfg
+          - api_version: admissionregistration.k8s.io/v1
+            kind: MutatingWebhookConfiguration
+            name: kyverno-resource-mutating-webhook-cfg
+          - api_version: admissionregistration.k8s.io/v1
+            kind: MutatingWebhookConfiguration
+            name: kyverno-verify-mutating-webhook-cfg
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/kyverno.yaml"
+
+    - name: Install/configure kyverno chart
+      when: kyverno_chart_state | default('present') == 'present'
+      block:
+        - name: Render kyverno helm values
+          ansible.builtin.template:
+            src: kyverno.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/kyverno.yaml"
+            mode: '0644'
+
+        - name: Helming {{ kyverno_namespace }}
+          ansible.builtin.command: >-
+            helm upgrade --install kyverno kyverno/kyverno
+            --namespace {{ kyverno_namespace }} --create-namespace
+            -f {{ k8s_manifests_dir }}/kyverno.yaml
+            {{ kyverno_chart_version | helm_chart_version_args }}
+
+        - name: Wait for Kyverno admission-controller Ready
+          ansible.builtin.command: >-
+            kubectl wait --timeout=5m
+            -n {{ kyverno_namespace }}
+            --for=condition=Ready
+            pod -l app.kubernetes.io/component=admission-controller
+          register: wait_kyverno_admission
+          until: wait_kyverno_admission.rc == 0
+          retries: 20
+          delay: 6
+          changed_when: false

@@ -1,0 +1,7 @@
+---
+- name: Install etcdctl binary on debug tooling host
+  ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/install_etcdctl_binary.yaml"
+  vars:
+    install_etcdctl_dest: "{{ debug_tooling_install_dir }}/etcdctl"
+    install_etcdctl_staging_dir: "{{ debug_tooling_staging_dir }}"
+    install_etcdctl_version: "{{ etcd_version }}"

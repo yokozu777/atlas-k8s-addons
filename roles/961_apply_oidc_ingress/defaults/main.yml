@@ -1,0 +1,5 @@
+---
+# HTTPRoute + Envoy SecurityPolicy OIDC after Keycloak realm (930).
+# 560_apply_ingress creates HTTPS listeners but skips oidc_auth HTTPRoutes.
+# No extra catalog knobs: k8s_ingress_apps[].oidc_auth, oidc_issuer_url,
+# k8s_secrets.envoy_gateway_oidc_client_secret.

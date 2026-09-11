@@ -1,0 +1,162 @@
+---
+- name: Put ILM policy atlas-logs
+  ansible.builtin.include_tasks: elasticsearch_put.yml
+  vars:
+    elasticsearch_put_title: PUT _ilm/policy/atlas-logs
+    elasticsearch_put_url: "https://{{ elasticsearch_host }}/_ilm/policy/atlas-logs"
+    elasticsearch_put_body:
+      policy:
+        phases:
+          # Timeseries ILM requires hot; empty actions = no rollover (daily Logstash indices).
+          hot:
+            min_age: 0ms
+            actions: {}
+          delete:
+            min_age: "{{ elasticsearch_ilm_delete_after }}"
+            actions:
+              delete: {}
+
+- name: Put component template atlas-logs-settings
+  ansible.builtin.include_tasks: elasticsearch_put.yml
+  vars:
+    elasticsearch_put_title: PUT _component_template/atlas-logs-settings
+    elasticsearch_put_url: "https://{{ elasticsearch_host }}/_component_template/atlas-logs-settings"
+    elasticsearch_put_body:
+      template:
+        settings:
+          index.lifecycle.name: atlas-logs
+          index.number_of_replicas: "{{ elasticsearch_logs_index_replicas }}"
+          index.mapping.total_fields.limit: 2000
+          index.mapping.ignore_malformed: true
+
+- name: Put component template atlas-logs-mappings
+  ansible.builtin.include_tasks: elasticsearch_put.yml
+  vars:
+    elasticsearch_put_title: PUT _component_template/atlas-logs-mappings
+    elasticsearch_put_url: "https://{{ elasticsearch_host }}/_component_template/atlas-logs-mappings"
+    elasticsearch_put_body:
+      template:
+        mappings:
+          dynamic_templates:
+            - strings_as_keywords:
+                match_mapping_type: string
+                mapping:
+                  type: keyword
+                  ignore_above: 1024
+          properties:
+            "@timestamp":
+              type: date
+            atlas_severity:
+              type: keyword
+              ignore_above: 1024
+            atlas_heartbeat:
+              type: keyword
+              ignore_above: 1024
+            log:
+              type: text
+              fields:
+                keyword:
+                  type: keyword
+                  ignore_above: 32766
+            message:
+              type: text
+              fields:
+                keyword:
+                  type: keyword
+                  ignore_above: 1024
+            MESSAGE:
+              type: keyword
+              ignore_above: 32766
+            kubernetes:
+              type: object
+              dynamic: true
+            log_processed:
+              type: object
+              dynamic: true
+
+- name: Put index template kube-logs
+  ansible.builtin.include_tasks: elasticsearch_put.yml
+  vars:
+    elasticsearch_put_title: PUT _index_template/kube-logs
+    elasticsearch_put_url: "https://{{ elasticsearch_host }}/_index_template/kube-logs"
+    elasticsearch_put_body:
+      index_patterns:
+        - kube-logs-*
+      composed_of:
+        - atlas-logs-settings
+        - atlas-logs-mappings
+      priority: 200
+
+- name: Put index template host-logs
+  ansible.builtin.include_tasks: elasticsearch_put.yml
+  vars:
+    elasticsearch_put_title: PUT _index_template/host-logs
+    elasticsearch_put_url: "https://{{ elasticsearch_host }}/_index_template/host-logs"
+    elasticsearch_put_body:
+      index_patterns:
+        - host-logs-*
+      composed_of:
+        - atlas-logs-settings
+        - atlas-logs-mappings
+      priority: 200
+
+# Existing daily indices: raise log.keyword / MESSAGE ignore_above. Dynamic strings stay 1024.
+- name: Put live mapping on kube-logs-* (safe fields only)
+  ansible.builtin.include_tasks: elasticsearch_put.yml
+  vars:
+    elasticsearch_put_title: PUT kube-logs-*/_mapping
+    elasticsearch_put_url: "https://{{ elasticsearch_host }}/kube-logs-*/_mapping"
+    elasticsearch_put_ok_statuses: [200, 201, 404]
+    elasticsearch_put_body:
+      properties:
+        atlas_severity:
+          type: keyword
+          ignore_above: 1024
+        atlas_heartbeat:
+          type: keyword
+          ignore_above: 1024
+        log:
+          type: text
+          fields:
+            keyword:
+              type: keyword
+              ignore_above: 32766
+        message:
+          type: text
+          fields:
+            keyword:
+              type: keyword
+              ignore_above: 1024
+        MESSAGE:
+          type: keyword
+          ignore_above: 32766
+
+- name: Put live mapping on host-logs-* (safe fields only)
+  ansible.builtin.include_tasks: elasticsearch_put.yml
+  vars:
+    elasticsearch_put_title: PUT host-logs-*/_mapping
+    elasticsearch_put_url: "https://{{ elasticsearch_host }}/host-logs-*/_mapping"
+    elasticsearch_put_ok_statuses: [200, 201, 404]
+    elasticsearch_put_body:
+      properties:
+        atlas_severity:
+          type: keyword
+          ignore_above: 1024
+        atlas_heartbeat:
+          type: keyword
+          ignore_above: 1024
+        log:
+          type: text
+          fields:
+            keyword:
+              type: keyword
+              ignore_above: 32766
+        message:
+          type: text
+          fields:
+            keyword:
+              type: keyword
+              ignore_above: 1024
+        MESSAGE:
+          type: keyword
+          ignore_above: 32766

@@ -1,0 +1,11 @@
+---
+# Operator catalog: group_vars/all/atlas-k8s-addons.yml
+envoy_gateway_namespace: envoy-gateway-system
+envoy_gateway_chart_oci: oci://docker.io/envoyproxy/gateway-helm
+envoy_gateway_chart_version: "v1.8.3"
+envoy_gateway_chart_state: present
+envoy_gateway_release_name: eg
+envoy_gateway_gatewayclass_name: eg
+envoy_gateway_gateway_name: atlas
+envoy_gateway_proxy_name: atlas-proxy
+envoy_gateway_wildcard_secret: atlas-wildcard-tls

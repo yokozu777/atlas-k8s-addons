@@ -1,0 +1,13 @@
+{{- $src := .Files.Get "files/upstream/supervisor-resources.yaml" -}}
+{{- if not $src -}}
+{{- fail "missing files/upstream/supervisor-resources.yaml" -}}
+{{- end -}}
+{{- $nsDoc := "---\napiVersion: v1\nkind: Namespace\nmetadata:\n  name: pinniped-supervisor\n  labels:\n    app: pinniped-supervisor\n---\n" -}}
+{{- if not (contains $nsDoc $src) -}}
+{{- fail "expected Namespace pinniped-supervisor in upstream supervisor YAML" -}}
+{{- end -}}
+{{- $src = $src | replace $nsDoc "" -}}
+{{- if not (contains "namespace: pinniped-supervisor" $src) -}}
+{{- fail "expected namespace: pinniped-supervisor in upstream supervisor YAML" -}}
+{{- end -}}
+{{ $src | replace "namespace: pinniped-supervisor" (printf "namespace: %s" .Values.pinnipedNamespace) }}

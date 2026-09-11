@@ -1,0 +1,30 @@
+# Scan kube-system only (not cluster-wide). excludeNamespaces is unused when
+# targetNamespaces is set. No chart UI/ingress; reports are CRs + Prometheus.
+targetNamespaces: "kube-system"
+
+# CIS node-collector Jobs pin to kubernetes.io/hostname (incl. control-plane).
+# Operator 0.34.0 ignores nodeCollector.tolerations on Jobs
+# (aquasecurity/trivy-operator#2761). scanJob.tolerations is what it copies
+# onto node-collector. Image-scan Jobs get the same permission, not a pin.
+nodeCollector:
+  useNodeSelector: true
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+
+trivyOperator:
+  scanJobTolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+
+# gnet 16337 table "Detailed CVE" queries trivy_vulnerability_id (off by default).
+operator:
+  metricsVulnIdEnabled: true
+
+service:
+  headless: false
+
+serviceMonitor:
+  enabled: true

@@ -1,0 +1,19 @@
+apiVersion: idp.supervisor.pinniped.dev/v1alpha1
+kind: OIDCIdentityProvider
+metadata:
+  name: {{ .Values.idpName }}
+  namespace: {{ .Values.pinnipedNamespace }}
+spec:
+  issuer: {{ .Values.keycloakIssuer | quote }}
+  tls:
+    certificateAuthorityData: {{ .Values.caBundleB64 | quote }}
+  client:
+    secretName: {{ .Values.oidcClientSecretName }}
+  authorizationConfig:
+    additionalScopes:
+      - offline_access
+      - email
+      - profile
+  claims:
+    username: preferred_username
+    groups: groups

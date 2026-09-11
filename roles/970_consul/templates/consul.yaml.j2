@@ -1,0 +1,15 @@
+global:
+  name: consul
+  metrics:
+    enabled: true
+    enableAgentMetrics: true
+
+server:
+  replicas: {{ consul_server_replicas | default(3) | int }}
+  storage: 10Gi
+
+connectInject:
+  enabled: false
+
+client:
+  enabled: false

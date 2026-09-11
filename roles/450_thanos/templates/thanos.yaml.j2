@@ -1,0 +1,68 @@
+# thanos-community/thanos — query + receive + storegateway + compact.
+# Object store Secret is created by 450_thanos (Rook OBC), not by this chart.
+global:
+  clusterDomain: "{{ k8s_dns_domain }}"
+  objstore:
+    createSecret: false
+    secretName: "{{ thanos_objstore_secret }}"
+    secretKey: objstore.yml
+  serviceMonitor:
+    enabled: true
+    namespace: "{{ monitoring_namespace }}"
+
+query:
+  enabled: true
+  replicaCount: {{ thanos_query_replicas | int }}
+  replicaLabels:
+    - prometheus_replica
+    - receive_replica
+  endpoints:
+    autogen:
+      enabled: true
+
+receive:
+  enabled: true
+  mode: standalone
+  replicaCount: {{ thanos_receive_replicas | int }}
+  tsdb:
+    retention: "{{ thanos_receive_tsdb_retention }}"
+    walCompression: true
+  persistence:
+    enabled: true
+    size: "{{ thanos_receive_pvc_size }}"
+    storageClass: "{{ thanos_pvc_storage_class }}"
+
+storegateway:
+  enabled: true
+  replicaCount: {{ thanos_store_replicas | int }}
+  persistence:
+    enabled: true
+    size: "{{ thanos_store_pvc_size }}"
+    storageClass: "{{ thanos_pvc_storage_class }}"
+
+compactor:
+  enabled: true
+  replicaCount: 1
+  retention:
+    resolutionRaw: "{{ thanos_compactor_retention_raw }}"
+    resolution5m: "{{ thanos_compactor_retention_5m }}"
+    resolution1h: "{{ thanos_compactor_retention_1h }}"
+  persistence:
+    enabled: true
+    size: "{{ thanos_compactor_pvc_size }}"
+    storageClass: "{{ thanos_pvc_storage_class }}"
+
+queryFrontend:
+  enabled: false
+
+ruler:
+  enabled: false
+
+bucket:
+  enabled: false
+
+rustfs:
+  enabled: false
+
+kube-prometheus-stack:
+  enabled: false

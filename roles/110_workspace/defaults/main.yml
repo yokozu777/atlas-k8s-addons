@@ -1,0 +1,43 @@
+---
+# Controller workspace contract (play 110_workspace on localhost).
+# Override via group_vars/all/atlas-k8s-addons.yml or env CLUSTER_WORKSPACE_ID / CLUSTER_WORKSPACE_PARENT / CLUSTER_WORKSPACE_ROOT.
+k8s_cluster_domain: k8s.example.com
+cluster_domain: "{{ k8s_cluster_domain }}"
+cluster_workspace_id: "{{ lookup('ansible.builtin.env', 'CLUSTER_WORKSPACE_ID') | default(k8s_cluster_domain, true) }}"
+cluster_workspace_parent: "{{ lookup('ansible.builtin.env', 'CLUSTER_WORKSPACE_PARENT') | default('./workspace', true) }}"
+cluster_workspace_root: "{{ lookup('ansible.builtin.env', 'CLUSTER_WORKSPACE_ROOT') | default(cluster_workspace_parent ~ '/' ~ cluster_workspace_id, true) }}"
+
+# Derived controller layout (aligned again in validate after env resolution).
+controller_workspace: "{{ cluster_workspace_root }}/controller-state"
+controller_manifests_dir: "{{ controller_workspace }}/manifests"
+controller_reports_dir: "{{ controller_workspace }}/reports"
+controller_kubeconfig: "{{ controller_workspace }}/kubeconfig/admin.conf"
+controller_python_venv: "{{ controller_workspace }}/venv"
+controller_bin_dir: "{{ controller_workspace }}/bin"
+controller_helm_config_dir: "{{ controller_workspace }}/helm-config"
+controller_helm_cache_dir: "{{ controller_helm_config_dir }}/cache"
+controller_ca_cert_dir: "{{ controller_workspace }}/certs"
+controller_ca_cert_path: "{{ controller_ca_cert_dir }}/{{ k8s_ca_cert_filename | default('ca.crt') }}"
+controller_ssl_cert_file: "{{ controller_ca_cert_dir }}/ca-bundle.crt"
+controller_tls_environment: "{{
+  {
+    'SSL_CERT_FILE': controller_ssl_cert_file,
+    'REQUESTS_CA_BUNDLE': controller_ssl_cert_file,
+    'GIT_SSL_CAINFO': controller_ssl_cert_file
+  } if (pki_ca_url | default('') | length > 0) else {}
+}}"
+controller_staging_dir: "{{ controller_workspace }}/staging"
+controller_secrets_dir: "{{ controller_workspace }}/secrets"
+k8s_control_plane_scripts_dir: "{{ controller_workspace }}/scripts"
+
+# Layout stubs (validate path-prefix contract; used by addons roles / reports).
+keycloak_tf_workspace: "{{ controller_staging_dir }}/keycloak-realm"
+k8s_kibana_chart_dir: "{{ controller_staging_dir }}/kibana"
+# Durable TF state: <atlas_cluster_root>/tfstate/<cluster_id>/ (sibling of workspace/)
+provision_tf_state_local_dir: "{{ atlas_cluster_root | default('.', true) }}/tfstate"
+provision_tf_state_cluster_path: "{{ cluster_id | default(cluster_workspace_id, true) }}"
+provision_tf_state_repo_dir: "{{ provision_tf_state_local_dir }}/{{ provision_tf_state_cluster_path }}"
+provision_tf_workspace_dir: "{{ cluster_workspace_root }}/tf_workspace"
+provision_generated_variables_tf: "{{ cluster_workspace_root }}/generated/variables.tf"
+build_workdir: "{{ cluster_workspace_root }}/build/workspace"
+build_state_file: "{{ cluster_workspace_root }}/build/build_templates_state.json"

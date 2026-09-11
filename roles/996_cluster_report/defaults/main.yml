@@ -1,0 +1,443 @@
+cluster_credentials_file: "{{ controller_reports_dir }}/cluster-credentials.yaml"
+cluster_credentials_md_file: "{{ controller_reports_dir }}/cluster-credentials.md"
+cluster_credentials_mode: full
+cluster_credentials_include_infra: false
+cluster_credentials_collect_runtime: true
+
+# Infra catalog for MD/YAML when cluster_credentials_include_infra=true.
+# enabled_var: skip group when var is false/absent.
+# value_var / value_template: mutually exclusive value sources.
+cluster_credentials_infra_catalog:
+  - id: dns_bind
+    category: dns
+    title: BIND (infra DNS)
+    enabled_var: setup_bind
+    items:
+      - label: BIND hostname
+        value_var: bind_hostname
+      - label: DNS server IP
+        value_var: dns_server_ip
+      - label: K8s zone
+        value_var: bind_k8s_zone
+      - label: Istio zone
+        value_var: bind_istio_zone
+      - label: Apex zone
+        value_var: bind_apex_zone
+
+  - id: pki_stepca
+    category: pki
+    title: step-ca (internal PKI)
+    enabled_var: setup_stepca
+    items:
+      - label: CA bundle URL
+        value_var: pki_ca_url
+      - label: CA host
+        value_var: pki_ca_host
+      - label: step-ca listen
+        value_template: "{{ stepca_listen_ip }}:{{ stepca_https_port }}"
+
+  - id: ntp
+    category: time
+    title: NTP (infra)
+    enabled_var: setup_ntp
+    items:
+      - label: NTP hostname
+        value_var: ntp_hostname
+      - label: Listen IP
+        value_var: ntp_listen_ip
+
+  - id: artifacts
+    category: artifacts
+    title: Artifact repositories
+    items:
+      - label: Nexus
+        value_var: nexus_base_url
+      - label: Gitea
+        value_template: "https://{{ gitea_host }}"
+
+  - id: docker_registry
+    category: registry
+    title: Container registry
+    enabled_var: setup_registry
+    items:
+      - label: Registry ingress
+        value_template: "https://{{ registry_ingress_domain }}"
+      - label: Pull-through example
+        value_template: "https://docker-io.{{ registry_ingress_domain }}"
+
+  - id: docker_harbor
+    category: registry
+    title: Harbor registry
+    enabled_when: "{{ use_internal_docker_registry | default('none') == 'harbor' }}"
+    items:
+      - label: Harbor mirror
+        value_var: harbor_mirror_base
+
+  - id: pkg_repo
+    category: packages
+    title: APT/RPM mirror (nginx)
+    enabled_var: setup_pkg_repo_nginx
+    items:
+      - label: Package repo URL
+        value_template: "https://{{ pkg_repo_nginx_host }}"
+
+  - id: helm_repo
+    category: packages
+    title: Helm chart mirror (nginx)
+    enabled_var: setup_helm_repo_nginx
+    items:
+      - label: Helm repo URL
+        value_template: "https://{{ helm_repo_nginx_host }}"
+
+  - id: proxmox
+    category: hypervisor
+    title: Proxmox VE (provisioning)
+    items:
+      - label: API URL
+        value_var: provision_proxmox_api_url
+      - label: SSH / API host
+        value_var: provision_pve_host
+      - label: Target node
+        value_var: provision_proxmox_target_node
+      - label: API token ID
+        value_var: provision_proxmox_token_id
+
+# Runtime secrets fetched via kubectl/kubernetes.core (collect_runtime.yaml).
+# state_var: skip when chart is absent; data_key: key in secret.data (base64).
+cluster_credentials_runtime_secrets:
+  - id: argocd_initial_admin_password
+    title: Argo CD initial admin password
+    secret: argocd-initial-admin-secret
+    namespace_var: argocd_namespace
+    state_var: argocd_chart_state
+    data_key: password
+
+  - id: keycloak_cnpg_app
+    title: Keycloak PostgreSQL (keycloak user)
+    secret: "{{ keycloak_cnpg_cluster_name }}-app"
+    namespace_var: keycloak_namespace
+    state_var: keycloak_chart_state
+    data_key: password
+
+  - id: elastic_credentials_username
+    title: Elasticsearch credentials (username)
+    secret: elastic-credentials
+    namespace_var: logging_namespace
+    state_var: elasticsearch_chart_state
+    data_key: username
+
+  - id: elastic_credentials_password
+    title: Elasticsearch credentials (password)
+    secret: elastic-credentials
+    namespace_var: logging_namespace
+    state_var: elasticsearch_chart_state
+    data_key: password
+
+# Catalog for MD/YAML reports. Resolved in tasks/build_report.yaml.
+# host_var / url_var: mutually exclusive URL sources.
+# state_var: skip entry when chart state is not present.
+# password_key: key in k8s_secrets; password_format: plain | bcrypt.
+cluster_credentials_services:
+  - id: grafana
+    section: monitoring
+    title: Grafana
+    icon: "📊"
+    state_var: prometheus_chart_state
+    host_var: grafana_host
+    namespace_var: monitoring_namespace
+    username_var: grafana
+    password_key: grafana_admin_password
+    auth: basic
+    notes: "Ingress profile grafana; OAuth via Keycloak when enabled."
+
+  - id: prometheus
+    section: monitoring
+    title: Prometheus
+    icon: "📈"
+    state_var: prometheus_chart_state
+    host_var: prometheus_host
+    namespace_var: monitoring_namespace
+    auth: oauth2
+    notes: "UI via ingress; OAuth2 proxy when enabled."
+
+  - id: opencost
+    section: monitoring
+    title: OpenCost
+    icon: "💰"
+    state_var: opencost_chart_state
+    host_var: opencost_host
+    namespace_var: opencost_namespace
+    auth: oauth2
+    notes: "UI via Envoy SecurityPolicy (Keycloak client envoy-gateway). Chart Ingress off. HTTPRoute after 961."
+
+  - id: alertmanager
+    section: monitoring
+    title: Alertmanager
+    icon: "🔔"
+    state_var: prometheus_chart_state
+    host_var: alertmanager_host
+    namespace_var: monitoring_namespace
+    auth: oauth2
+    notes: "UI via Envoy OIDC HTTPRoute. SMTP {{ alertmanager_mail.host }}:{{ alertmanager_mail.port }} to {{ alertmanager_mail.to }}."
+
+  - id: blackbox
+    section: monitoring
+    title: Blackbox Exporter
+    icon: "📦"
+    state_var: blackbox_exporter_chart_state
+    host_var: blackbox_host
+    namespace_var: monitoring_namespace
+    auth: oauth2
+
+  - id: elasticsearch
+    section: logging
+    title: Elasticsearch (superuser)
+    icon: "🔍"
+    state_var: elasticsearch_chart_state
+    host_var: elasticsearch_host
+    namespace_var: logging_namespace
+    username_var: elastic_superuser
+    password_key: elastic_password
+    auth: basic
+    notes: "HTTPS via ingress ssl_passthrough."
+
+  - id: elasticsearch_admin
+    section: logging
+    title: Elasticsearch (admin)
+    icon: "🔍"
+    state_var: elasticsearch_chart_state
+    host_var: elasticsearch_host
+    namespace_var: logging_namespace
+    username_var: elastic_admin
+    password_key: elastic_admin_password
+    auth: basic
+
+  - id: elasticsearch_logger
+    section: logging
+    title: Elasticsearch (logger)
+    icon: "🔍"
+    state_var: elasticsearch_chart_state
+    host_var: elasticsearch_host
+    namespace_var: logging_namespace
+    username_var: elastic_logger
+    password_key: elastic_logger_password
+    auth: basic
+
+  - id: elasticsearch_jaeger
+    section: logging
+    title: Elasticsearch (jaeger)
+    icon: "🔍"
+    state_var: elasticsearch_chart_state
+    host_var: elasticsearch_host
+    namespace_var: logging_namespace
+    username_var: elastic_jaeger
+    password_key: elastic_jaeger_password
+    auth: basic
+
+  - id: kibana
+    section: logging
+    title: Kibana
+    icon: "📋"
+    state_var: kibana_chart_state
+    host_var: kibana_host
+    namespace_var: logging_namespace
+    username_var: kibana_dashboard
+    password_key: kibana_elastic_password
+    auth: basic
+    notes: "HTTPS via ingress ssl_passthrough."
+
+  - id: keycloak
+    section: identity
+    title: Keycloak Admin
+    icon: "🔐"
+    state_var: keycloak_chart_state
+    url_var: keycloak_url
+    namespace_var: keycloak_namespace
+    username: admin
+    password_key: keycloak_admin_password
+    auth: basic
+    notes: "OIDC realm: {{ keycloak_realm }}; issuer {{ oidc_issuer_url }}."
+
+  - id: keycloak_oidc_user
+    section: identity
+    title: Keycloak OIDC test user
+    icon: "👤"
+    state_var: keycloak_chart_state
+    url_var: oidc_issuer_url
+    namespace_var: keycloak_namespace
+    password_key: keycloak_oidc_user_password
+    auth: oidc
+    notes: "Password for OIDC test user in realm {{ keycloak_realm }}. After 71+81+79: KUBECONFIG={{ controller_kubeconfig }}.oidc kubectl get ns (browser on localhost:8000). Install kubectl-oidc_login on the client PATH. Controller break-glass remains admin.conf."
+
+  - id: pinniped
+    section: identity
+    title: Pinniped
+    icon: "🪪"
+    state_var: pinniped_chart_state
+    host_var: pinniped_login_host
+    namespace_var: pinniped_namespace
+    auth: oidc
+    notes: "https://{{ pinniped_login_host }} (Keycloak login) serves README and {{ k8s_cluster_domain }}.yaml. Supervisor issuer https://{{ pinniped_host }} is TLS passthrough (not a browser page). Controller copy: KUBECONFIG={{ controller_kubeconfig }}.pinniped. pinniped CLI on PATH. Break-glass remains admin.conf and {{ controller_kubeconfig }}.oidc (kubelogin)."
+
+  - id: oauth2_proxy
+    section: identity
+    title: OAuth2 Proxy
+    icon: "🛡️"
+    state_var: oauth2_proxy_chart_state
+    host_var: oauth2_host
+    namespace_var: oauth2_proxy_namespace
+    auth: oauth2
+    notes: "Callback {{ oauth2_callback_url }}; sign-out {{ oauth2_signout_url }}."
+
+  - id: argocd
+    section: gitops
+    title: Argo CD
+    icon: "🚀"
+    state_var: argocd_chart_state
+    host_var: argocd_host
+    namespace_var: argocd_namespace
+    username: admin
+    password_key: argocd_admin_password_bcrypt
+    password_format: bcrypt
+    auth: local
+    notes: "OIDC client argocd; login gated by realm role argocd-access (group argocd-admins); RBAC uses groups claim; local admin break-glass. Helm value is bcrypt; UI password may also be in argocd-initial-admin-secret."
+
+  - id: argo_rollouts
+    section: gitops
+    title: Argo Rollouts
+    icon: "📦"
+    state_var: argo_rollouts_chart_state
+    host_var: argo_rollouts_host
+    namespace_var: argo_rollouts_namespace
+    auth: oauth2
+    notes: "UI via Envoy SecurityPolicy (Keycloak client envoy-gateway). Chart has no OIDC. HTTPRoute after 961."
+
+  - id: headlamp
+    section: platform
+    title: Headlamp
+    icon: "🔦"
+    state_var: headlamp_chart_state
+    host_var: headlamp_host
+    namespace_var: headlamp_namespace
+    auth: oauth2
+
+  - id: mailu
+    section: platform
+    title: Mailu
+    icon: "✉️"
+    state_var: mailu_chart_state
+    host_var: mailu_host
+    namespace_var: mailu_namespace
+    username: "{{ mailu_initial_username }}"
+    password_key: mailu_initial_password
+    auth: oauth2
+    notes: "UI via Envoy SecurityPolicy (Keycloak client envoy-gateway), HTTPRoute :80 (TLS_FLAVOR=mail). Chart has no OIDC; proxyAuth X-Auth-Request-Email. IMAP/SMTP stay password/app token. MX {{ mailu_domain }} → {{ mailu_mx_host }} via external-dns-apex. HTTPRoute after 961."
+
+  - id: rook_ceph
+    section: storage
+    title: Rook / Ceph Dashboard
+    icon: "💾"
+    state_var: rook_cluster_chart_state
+    host_var: rook_host
+    namespace_var: rook_cluster_namespace
+    username_var: ceph_dashboard
+    password_key: ceph_dashboard_password
+    auth: basic
+
+  - id: vault
+    section: security
+    title: Vault
+    icon: "🔒"
+    state_var: vault_chart_state
+    host_var: vault_host
+    namespace_var: vault_namespace
+    auth: local
+    username_var: vault_admin
+    password_key: vault_admin_password
+    notes: "OIDC (Keycloak client vault, group vault-admins) plus userpass {{ vault_admin }} break-glass. Unseal keys: /root/vault-init-keys.txt on k8s_masters (chmod 600)."
+
+  - id: falco
+    section: security
+    title: Falco UI
+    icon: "🦅"
+    state_var: falco_chart_state
+    host_var: falco_host
+    namespace_var: falco_namespace
+    auth: oauth2
+
+  - id: policy_reporter
+    section: security
+    title: Policy Reporter
+    icon: "📋"
+    state_var: policy_reporter_chart_state
+    host_var: policy_reporter_host
+    namespace_var: policy_reporter_namespace
+    auth: oauth2
+    notes: "UI via Envoy SecurityPolicy (Keycloak client envoy-gateway). Chart has no OIDC. HTTPRoute after 961."
+
+  - id: jaeger
+    section: mesh
+    title: Jaeger
+    icon: "🔗"
+    state_var: jaeger_chart_state
+    host_var: jaeger_host
+    namespace_var: tracing_namespace
+    auth: oauth2
+
+  - id: kiali
+    section: mesh
+    title: Kiali
+    icon: "🕸️"
+    state_var: kiali_chart_state
+    host_var: kiali_host
+    namespace_var: kiali_operator_namespace
+    auth: oauth2
+
+  - id: chaos_mesh
+    section: platform
+    title: Chaos Mesh
+    icon: "🎲"
+    state_var: chaos_mesh_chart_state
+    host_var: chaos_mesh_host
+    namespace_var: chaos_mesh_namespace
+    auth: oauth2
+
+  - id: sentry
+    section: platform
+    title: Sentry
+    icon: "🐛"
+    state_var: sentry_chart_state
+  # Sentry may not have public ingress host in vars; credentials still exported.
+    namespace_var: sentry_namespace
+    username_var: sentry_admin_email
+    password_key: sentry_admin_password
+    auth: basic
+    notes: "SMTP user {{ sentry_mail.username }}; password key sentry_smtp_password."
+
+cluster_credentials_dns_secrets:
+  - id: external_dns_k8s
+    title: external-dns (Kubernetes)
+    password_key: external_dns_tsig_secret
+  - id: external_dns_istio
+    title: external-dns (Istio)
+    password_key: external_dns_istio_tsig_secret
+
+cluster_credentials_oauth_secrets:
+  - id: oauth2_client
+    title: OAuth2 client secret
+    password_key: oauth2_proxy_client_secret
+  - id: oauth2_cookie
+    title: OAuth2 cookie secret
+    password_key: oauth2_proxy_cookie_secret
+  - id: envoy_gateway_oidc
+    title: Envoy Gateway OIDC client secret
+    password_key: envoy_gateway_oidc_client_secret
+  - id: vault_oidc
+    title: Vault OIDC client secret
+    password_key: vault_oidc_client_secret
+  - id: argocd_oidc
+    title: Argo CD OIDC client secret
+    password_key: argocd_oidc_client_secret
+  - id: pinniped_supervisor_oidc
+    title: Pinniped Supervisor OIDC client secret
+    password_key: pinniped_supervisor_client_secret

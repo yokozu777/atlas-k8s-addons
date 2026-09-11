@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.loginUi.serviceName }}
+  namespace: {{ .Values.pinnipedNamespace }}
+  labels:
+    app: {{ .Values.loginUi.serviceName }}
+spec:
+  type: ClusterIP
+  selector:
+    app: {{ .Values.loginUi.serviceName }}
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: http

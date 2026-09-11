@@ -1,0 +1,31 @@
+---
+- name: Assert PKI variables for internal Helm repository TLS
+  ansible.builtin.assert:
+    that:
+      - pki_ca_url | default('') | length > 0
+      - k8s_ca_cert_filename | default('') | length > 0
+      - controller_ca_cert_dir | default('') | length > 0
+      - controller_ca_cert_path | default('') | length > 0
+      - controller_ca_cert_path is match('^' ~ controller_ca_cert_dir)
+      - controller_ssl_cert_file | default('') | length > 0
+      - controller_ssl_cert_file is match('^' ~ controller_ca_cert_dir)
+    fail_msg: >-
+      use_internal_helm_repo=nexus|nginx requires PKI vars for 120_controller_tooling
+      (pki_ca_url, k8s_ca_cert_filename, controller_ca_cert_*, controller_ssl_cert_file)
+      — helm repo index uses internal TLS
+  when: use_internal_helm_repo | default('nexus') in ['nexus', 'nginx']
+
+- name: Stat controller merged CA bundle
+  ansible.builtin.stat:
+    path: "{{ controller_ssl_cert_file }}"
+  register: controller_ssl_cert_file_stat
+  when: use_internal_helm_repo | default('nexus') in ['nexus', 'nginx']
+
+- name: Assert controller merged CA bundle exists
+  ansible.builtin.assert:
+    that:
+      - controller_ssl_cert_file_stat.stat.exists | default(false) | bool
+    fail_msg: >-
+      controller_ssl_cert_file {{ controller_ssl_cert_file }} is missing —
+      run 120_controller_tooling so ca-bundle.crt is merged before Helm
+  when: use_internal_helm_repo | default('nexus') in ['nexus', 'nginx']

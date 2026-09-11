@@ -1,0 +1,8 @@
+meshConfig:
+  enablePrometheusMerge: true
+  enableTracing: true
+  extensionProviders:
+  - name: otel-tracing
+    opentelemetry:
+      service: opentelemetry-collector.{{ tracing_namespace }}.svc.{{ k8s_dns_domain }}
+      port: 4317

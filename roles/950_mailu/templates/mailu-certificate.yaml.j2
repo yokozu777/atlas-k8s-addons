@@ -1,0 +1,13 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ mailu_https_secret }}
+  namespace: {{ mailu_namespace }}
+spec:
+  secretName: {{ mailu_https_secret }}
+  issuerRef:
+    name: {{ k8s_cluster_domain }}
+    kind: ClusterIssuer
+  dnsNames:
+    - {{ mailu_host }}
+    - {{ mailu_mx_host }}

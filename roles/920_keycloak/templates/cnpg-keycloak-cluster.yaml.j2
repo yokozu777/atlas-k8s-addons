@@ -1,0 +1,16 @@
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ keycloak_cnpg_cluster_name }}
+  namespace: {{ keycloak_namespace }}
+spec:
+  instances: {{ keycloak_cnpg_instances | int }}
+  bootstrap:
+    initdb:
+      database: keycloak
+      owner: keycloak
+  storage:
+    size: {{ keycloak_cnpg_storage }}
+  monitoring:
+    enablePodMonitor: true

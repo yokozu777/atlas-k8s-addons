@@ -1,0 +1,35 @@
+# Example inventory for ./run.sh.
+# Copy to inventory.yml (gitignored) and edit addresses / hostnames:
+#   cp inventory-example.yml inventory.yml
+#
+# Required groups (defaults; override names via group_vars targeting vars):
+# - k8s_masters   ← k8s_master_hosts   (>= 1; used by 140_fetch_kubeconfig + validate)
+# - k8s_workers   ← k8s_worker_hosts   (group must exist; may be empty; used by 999_debug_tooling)
+#
+# Optional parent group `k8s` nests the groups for readability.
+# Prefer the same hosts as atlas-k8s-core for a given cluster.
+# Set ansible_host and hostname on every node (prefer FQDN).
+
+all:
+  children:
+    k8s:
+      children:
+        k8s_masters:
+          hosts:
+            k8s-m1:
+              ansible_host: 192.168.1.225
+              hostname: master1.k8s.example.com
+            k8s-m2:
+              ansible_host: 192.168.1.226
+              hostname: master2.k8s.example.com
+            k8s-m3:
+              ansible_host: 192.168.1.227
+              hostname: master3.k8s.example.com
+        k8s_workers:
+          hosts:
+            k8s-w1:
+              ansible_host: 192.168.1.230
+              hostname: worker1.k8s.example.com
+            k8s-w2:
+              ansible_host: 192.168.1.231
+              hostname: worker2.k8s.example.com

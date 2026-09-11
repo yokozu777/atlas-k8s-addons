@@ -1,0 +1,50 @@
+    - name: Remove fluentbit Helm chart (absent)
+      when: fluentbit_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: fluent-bit
+            namespace: "{{ logging_namespace }}"
+        helm_chart_absent_extra_manifests:
+          - "{{ k8s_manifests_dir }}/fluentbit-servicemonitor.yaml"
+          - "{{ k8s_manifests_dir }}/fluentbit-prometheusrule.yaml"
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/fluentbit.yaml"
+          - "{{ k8s_manifests_dir }}/fluentbit-servicemonitor.yaml"
+          - "{{ k8s_manifests_dir }}/fluentbit-prometheusrule.yaml"
+    - name: Install/configure fluentbit chart
+      when: fluentbit_chart_state | default('present') == 'present'
+      block:
+        - name: Render fluent-bit helm values
+          ansible.builtin.template:
+            src: fluentbit.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/fluentbit.yaml"
+            mode: '0644'
+    
+        - name: Helming fluent-bit
+          command: >-
+            helm upgrade --install {{ item }}
+            --create-namespace
+            {{ fluentbit_chart_version | helm_chart_version_args }}
+          loop:
+            - fluent-bit fluent/fluent-bit --namespace {{ logging_namespace }} -f {{ k8s_manifests_dir }}/fluentbit.yaml
+
+        - name: Render Fluent Bit ServiceMonitor
+          ansible.builtin.template:
+            src: fluentbit-servicemonitor.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/fluentbit-servicemonitor.yaml"
+            mode: '0644'
+
+        - name: Apply Fluent Bit ServiceMonitor
+          ansible.builtin.command: >-
+            kubectl --validate=false apply -f {{ k8s_manifests_dir }}/fluentbit-servicemonitor.yaml
+
+        - name: Render Fluent Bit PrometheusRule
+          ansible.builtin.template:
+            src: fluentbit-prometheusrule.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/fluentbit-prometheusrule.yaml"
+            mode: '0644'
+
+        - name: Apply Fluent Bit PrometheusRule
+          ansible.builtin.command: >-
+            kubectl --validate=false apply -f {{ k8s_manifests_dir }}/fluentbit-prometheusrule.yaml

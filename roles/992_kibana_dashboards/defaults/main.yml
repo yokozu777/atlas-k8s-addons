@@ -1,0 +1,7 @@
+---
+# Operator catalog: group_vars/all/atlas-k8s-addons.yml (deep knobs in role tasks/templates).
+# clusterctl extra-vars are the inventory overlay; these keep 78 runnable when overlay omits knobs.
+kibana_alert_ns_error_threshold: 200
+kibana_alert_apiserver_error_threshold: 50
+kibana_alert_falco_threshold: 50
+kibana_alert_ceph_error_threshold: 50

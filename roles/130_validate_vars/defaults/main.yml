@@ -1,0 +1,86 @@
+---
+# Inventory group targeting (must match playbook / group_vars/all/atlas-k8s-addons.yml).
+k8s_master_hosts: k8s_masters
+k8s_worker_hosts: k8s_workers
+
+# grafana_dashboard_source: github-native JSON vs grafana.com gnetId (130_validate_vars).
+# grafana-native may be grafana (gnetId) or infra (url via grafana_dashboard_infra_base).
+grafana_dashboard_github_native_keys:
+  - istio
+  - ceph
+  - envoy
+  - thanos
+  - falco
+  - cnpg
+  - keycloak
+  - argocd
+  - argo_rollouts
+  - external_secrets
+  - jaeger
+  - calico_typha
+grafana_dashboard_grafana_native_keys:
+  - calico
+  - metallb
+  - vault
+  - fluentbit
+  - cert_manager
+  - elasticsearch
+  - blackbox
+  - consul
+  - external_dns
+  - chaos_mesh
+  - opentelemetry
+  - trivy
+  - opencost
+grafana_dashboard_source_github_native_values:
+  - github
+  - infra
+grafana_dashboard_source_grafana_native_values:
+  - grafana
+  - infra
+
+# *_chart_state enum: present = install/upgrade, skip = not in BOM, absent = teardown.
+k8s_chart_state_allowed:
+  - present
+  - skip
+  - absent
+k8s_chart_state_vars:
+  - calico_chart_state
+  - prometheus_chart_state
+  - blackbox_exporter_chart_state
+  - prometheus_adapter_chart_state
+  - rook_operator_chart_state
+  - rook_cluster_chart_state
+  - rook_csi_drivers_chart_state
+  - thanos_chart_state
+  - metallb_chart_state
+  - envoy_gateway_chart_state
+  - external_dns_chart_state
+  - cert_manager_chart_state
+  - trust_manager_chart_state
+  - elasticsearch_chart_state
+  - kibana_chart_state
+  - fluentbit_chart_state
+  - istio_chart_state
+  - external_dns_istio_chart_state
+  - jaeger_chart_state
+  - opentelemetry_collector_chart_state
+  - kiali_chart_state
+  - chaos_mesh_chart_state
+  - falco_chart_state
+  - kyverno_chart_state
+  - policy_reporter_chart_state
+  - argocd_chart_state
+  - argo_rollouts_chart_state
+  - cnpg_chart_state
+  - headlamp_chart_state
+  - keycloak_chart_state
+  - pinniped_chart_state
+  - mailu_chart_state
+  - trivy_chart_state
+  - opencost_chart_state
+  - oauth2_proxy_chart_state
+  - consul_chart_state
+  - vault_chart_state
+  - external_secrets_chart_state
+  - sentry_chart_state

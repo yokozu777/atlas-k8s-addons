@@ -1,0 +1,18 @@
+# Public HTTPS for FederationDomain (container 8443). Official Service
+# pinniped-supervisor-api is the aggregated API (443 -> 10250), not the IdP.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.httpsServiceName }}
+  namespace: {{ .Values.pinnipedNamespace }}
+  labels:
+    app: pinniped-supervisor
+spec:
+  type: ClusterIP
+  selector:
+    deployment.pinniped.dev: supervisor
+  ports:
+    - name: https
+      protocol: TCP
+      port: 443
+      targetPort: 8443

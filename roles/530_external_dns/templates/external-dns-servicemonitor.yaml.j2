@@ -1,0 +1,16 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: external-dns
+  namespace: {{ external_dns_namespace }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ external_dns_namespace }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: external-dns
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s

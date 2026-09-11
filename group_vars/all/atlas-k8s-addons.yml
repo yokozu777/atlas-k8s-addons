@@ -1,0 +1,1051 @@
+# atlas-k8s-addons — variable catalog for standalone runs
+# =======================================================
+# Operator surface that must satisfy roles/130_validate_vars.
+# Deep chart knobs live under roles/*/defaults/main.yml.
+# Workspace dirs are created by role 110_workspace (tag 110_workspace).
+#
+# Secrets: see group_vars/all/atlas-k8s-addons.secrets.yml (Vault-friendly).
+# Aggregate k8s_secrets: stays in this catalog (Jinja refs → secrets overlay).
+# Standalone alternative: EXTRA_VARS_FILE=examples/secrets.example.yml
+#
+# Sibling control-plane bootstrap: atlas-k8s-core (same inventory group names).
+
+# --------------------------------------------
+# REQUIRED — identity / workspace / targeting
+# --------------------------------------------
+
+# Inventory group targeting (override to rename groups)
+k8s_master_hosts: k8s_masters
+k8s_worker_hosts: k8s_workers
+
+# --- 999_debug_tooling (optional break-glass CLI on cluster nodes) ---
+debug_tooling_install_dir: /usr/local/bin
+debug_tooling_staging_dir: /var/tmp/ansible-debug-tooling
+debug_tooling_helm_enabled: false
+debug_tooling_helm_hosts: "{{ k8s_master_hosts }}"
+debug_tooling_calicoctl_enabled: true
+debug_tooling_calicoctl_hosts: "{{ k8s_master_hosts }}"
+debug_tooling_istioctl_enabled: true
+debug_tooling_istioctl_hosts: "{{ k8s_master_hosts }}"
+debug_tooling_etcdctl_enabled: true
+debug_tooling_etcdctl_hosts: "{{ k8s_master_hosts }}"
+# github = public GitHub Releases; infra = helm-nginx releases.helm.* vhost
+debug_tooling_binary_source: github
+debug_tooling_binary_infra_base: ""
+# Empty = skip kubeconfig install. Example: k8s_masters
+debug_tooling_install_kubeconfig: ""
+
+
+# Identity / DNS
+dns_domain_suffix: example.com
+cluster_domain: k8s.example.com
+k8s_cluster_domain: "{{ cluster_domain }}"
+k8s_cluster_name: atlas
+k8s_dns_domain: cluster.local
+k8s_lb_hostname: kubelb
+k8s_api_port: 6443
+control_plane_endpoint: "{{ k8s_lb_hostname }}.{{ dns_domain_suffix }}:{{ k8s_api_port }}"
+
+# SSH / node admin (140_fetch_kubeconfig, 999_debug_tooling)
+ansible_user: localuser
+k8s_admin_user: "{{ ansible_user }}"
+k8s_admin_home: "/home/{{ k8s_admin_user }}"
+
+# Controller workspace (role 110_workspace)
+# cluster_workspace_id must equal k8s_cluster_domain (validate contract).
+# Prefer CLUSTER_WORKSPACE_* from ./run.sh (absolute paths).
+# 110_workspace re-resolves env and realigns controller_* under the active root.
+cluster_workspace_id: "{{ lookup('ansible.builtin.env', 'CLUSTER_WORKSPACE_ID') | default(k8s_cluster_domain, true) }}"
+cluster_workspace_parent: "{{ lookup('ansible.builtin.env', 'CLUSTER_WORKSPACE_PARENT') | default('./workspace', true) }}"
+cluster_workspace_root: "{{ lookup('ansible.builtin.env', 'CLUSTER_WORKSPACE_ROOT') | default(cluster_workspace_parent ~ '/' ~ cluster_workspace_id, true) }}"
+
+controller_workspace: "{{ cluster_workspace_root }}/controller-state"
+controller_manifests_dir: "{{ controller_workspace }}/manifests"
+controller_reports_dir: "{{ controller_workspace }}/reports"
+controller_kubeconfig: "{{ controller_workspace }}/kubeconfig/admin.conf"
+controller_python_venv: "{{ controller_workspace }}/venv"
+controller_bin_dir: "{{ controller_workspace }}/bin"
+controller_helm_config_dir: "{{ controller_workspace }}/helm-config"
+controller_helm_cache_dir: "{{ controller_helm_config_dir }}/cache"
+controller_ca_cert_dir: "{{ controller_workspace }}/certs"
+k8s_ca_cert_filename: ca.crt
+controller_ca_cert_path: "{{ controller_ca_cert_dir }}/{{ k8s_ca_cert_filename }}"
+controller_ssl_cert_file: "{{ controller_ca_cert_dir }}/ca-bundle.crt"
+controller_tls_environment: "{{
+  {
+    'SSL_CERT_FILE': controller_ssl_cert_file,
+    'REQUESTS_CA_BUNDLE': controller_ssl_cert_file,
+    'GIT_SSL_CAINFO': controller_ssl_cert_file
+  } if (pki_ca_url | default('') | length > 0) else {}
+}}"
+controller_staging_dir: "{{ controller_workspace }}/staging"
+controller_secrets_dir: "{{ controller_workspace }}/secrets"
+k8s_control_plane_scripts_dir: "{{ controller_workspace }}/scripts"
+keycloak_tf_workspace: "{{ controller_staging_dir }}/keycloak-realm"
+# Filesystem mirror for terraform-provider-keycloak (lab overlay: /usr/local/share/terraform/plugins).
+keycloak_tf_plugin_dir: "{{ lookup('env', 'HOME') }}/.terraform.d/plugins"
+keycloak_tf_plugin_cache_dir: "{{ lookup('env', 'HOME') }}/.terraform.d/plugin-cache"
+keycloak_tf_provider_version: "5.8.0"
+k8s_kibana_chart_dir: "{{ controller_staging_dir }}/kibana"
+
+# Workspace layout stubs (path-prefix contract; created by 110_workspace)
+# Durable TF state: <atlas_cluster_root>/tfstate/<cluster_id>/ (sibling of workspace/)
+provision_tf_state_local_dir: "{{ atlas_cluster_root | default('.', true) }}/tfstate"
+provision_tf_state_cluster_path: "{{ cluster_id | default(cluster_workspace_id, true) }}"
+provision_tf_state_repo_dir: "{{ provision_tf_state_local_dir }}/{{ provision_tf_state_cluster_path }}"
+provision_tf_workspace_dir: "{{ cluster_workspace_root }}/tf_workspace"
+provision_generated_variables_tf: "{{ cluster_workspace_root }}/generated/variables.tf"
+build_workdir: "{{ cluster_workspace_root }}/build/workspace"
+build_state_file: "{{ cluster_workspace_root }}/build/build_templates_state.json"
+
+# Rook storage nodes SoT (430_rook_cluster). Standalone: copy examples/provision_hosts.example.yml
+# (or point at your provision inventory). Children group name must match k8s_worker_hosts.
+provision_hosts_file: "{{ playbook_dir }}/../examples/provision_hosts.example.yml"
+provision_rook_database_size_mb: "1024"
+provision_rook_data_disk_index: 1
+provision_rook_wwn_path_prefix: "/dev/disk/by-id/wwn-"
+
+# Platform aliases (roles 210–999 on controller)
+k8s_kubeconfig: "{{ controller_kubeconfig }}"
+k8s_manifests_dir: "{{ controller_manifests_dir }}"
+k8s_python_venv: "{{ controller_python_venv }}"
+k8s_cluster_fact_host: localhost
+k8s_kubeadm_admin_kubeconfig: /etc/kubernetes/admin.conf
+
+# First control-plane host (140_fetch_kubeconfig SSH from controller)
+k8s_control_plane_master_host: "{{ groups.get(k8s_master_hosts, []) | first | default('', true) }}"
+k8s_control_plane_ssh_user: "{{ k8s_admin_user }}"
+k8s_control_plane_ssh_target: "{{ k8s_control_plane_ssh_user }}@{{ k8s_control_plane_master_host }}"
+k8s_control_plane_ssh_private_key_file: >-
+  {{
+    lookup('ansible.builtin.env', 'ANSIBLE_PRIVATE_KEY_FILE', default='')
+    | default(lookup('ansible.builtin.env', 'SSH_KEY', default=''), true)
+    | default(ansible_ssh_private_key_file | default(''), true)
+  }}
+k8s_control_plane_ssh_extra_args: []
+
+# PKI placeholder (required by validate; used when use_internal_helm_repo is nexus|nginx)
+pki_ca_url:
+  - "https://ca.example.com:8443/roots.pem"
+
+# Cluster network (must match atlas-k8s-core / live cluster)
+vip_address: 192.168.1.210
+pod_subnet: 172.16.0.0/16
+# kubeadm kube-dns: 10th address of service_subnet
+cluster_dns_ip: 10.0.0.10
+
+# DNS that external-dns updates (BIND or other RFC2136 target)
+dns_server_ip: 192.168.1.53
+
+# --------------------------------------------
+# REQUIRED — Helm / platform catalog
+# --------------------------------------------
+
+# --- 210_helm_bootstrap (atlas-k8s-addons) ---
+helm_version: https://get.helm.sh/helm-v4.2.1-linux-amd64.tar.gz
+
+# Standalone default: public Helm repos (no internal TLS mirror).
+# For air-gapped: use_internal_helm_repo: nginx|nexus and fill nexus_*/helm_repo_nginx_* (see role 210).
+use_internal_helm_repo: none
+setup_helm_repo_nginx: false
+setup_helm_nginx: "{{ use_internal_helm_repo == 'nginx' and setup_helm_repo_nginx }}"
+# Placeholder required by 130_validate_vars even when mode is none (override for real Nexus).
+nexus_host: nexus.example.com
+nexus_base_url: "https://{{ nexus_host }}/repository"
+helm_repo_nginx_ingress_domain: ""
+# Public upstream SoT + nexus_path; helm_repos.path must match nexus_path
+# nginx hostname: <helm_repos.name>.helm.<dns_domain_suffix> (filter helm_repo_client_url)
+# chart_hosts (optional): extra chart URL hosts in index.yaml for sub_filter
+helm_repo_upstreams:
+  - { name: oauth2-proxy, nexus_path: oauth2-proxy, upstream_url: "https://oauth2-proxy.github.io/manifests", upstream_host: oauth2-proxy.github.io }
+  - { name: falcosecurity, nexus_path: falco, upstream_url: "https://falcosecurity.github.io/charts", upstream_host: falcosecurity.github.io }
+  - { name: projectcalico, nexus_path: calico, upstream_url: "https://docs.tigera.io/calico/charts", upstream_host: docs.tigera.io, chart_hosts: [github.com] }
+  - { name: metallb, nexus_path: metallb, upstream_url: "https://metallb.github.io/metallb", upstream_host: metallb.github.io }
+  - { name: prometheus-community, nexus_path: prometheus-community, upstream_url: "https://prometheus-community.github.io/helm-charts", upstream_host: prometheus-community.github.io }
+  - { name: ceph-csi-operator, nexus_path: rook-ceph-csi-operator, upstream_url: "https://ceph.github.io/ceph-csi-operator", upstream_host: ceph.github.io }
+  - { name: rook-release, nexus_path: rook-release, upstream_url: "https://charts.rook.io/release", upstream_host: charts.rook.io }
+  - { name: fluent, nexus_path: fluent, upstream_url: "https://fluent.github.io/helm-charts", upstream_host: fluent.github.io }
+  - { name: elastic, nexus_path: helm.elastic.local/, upstream_url: "https://helm.elastic.co", upstream_host: helm.elastic.co }
+  - { name: hashicorp, nexus_path: helm.releases.hashicorp.com/, upstream_url: "https://helm.releases.hashicorp.com", upstream_host: helm.releases.hashicorp.com }
+  - { name: istio, nexus_path: istio/, upstream_url: "https://istio-release.storage.googleapis.com/charts", upstream_host: istio-release.storage.googleapis.com }
+  - { name: kiali, nexus_path: kiali/, upstream_url: "https://kiali.org/helm-charts", upstream_host: kiali.org }
+  - { name: argo, nexus_path: argo/, upstream_url: "https://argoproj.github.io/argo-helm", upstream_host: argoproj.github.io }
+  - { name: codecentric, nexus_path: codecentric/, upstream_url: "https://codecentric.github.io/helm-charts", upstream_host: codecentric.github.io }
+  - { name: sentry, nexus_path: sentry/, upstream_url: "https://sentry-kubernetes.github.io/charts", upstream_host: sentry-kubernetes.github.io }
+  - { name: jetstack, nexus_path: jetstack/, upstream_url: "https://charts.jetstack.io", upstream_host: charts.jetstack.io }
+  - { name: kong-z, nexus_path: kong-z/, upstream_url: "https://charts.konghq.com", upstream_host: charts.konghq.com, chart_hosts: [github.com] }
+  - { name: metrics-server, nexus_path: metrics-server/, upstream_url: "https://kubernetes-sigs.github.io/metrics-server", upstream_host: kubernetes-sigs.github.io }
+  - { name: aquasecurity, nexus_path: aquasecurity/, upstream_url: "https://aquasecurity.github.io/helm-charts", upstream_host: aquasecurity.github.io }
+  - { name: kubecost, nexus_path: kubecost/, upstream_url: "https://kubecost.github.io/cost-analyzer", upstream_host: kubecost.github.io }
+  - { name: opencost, nexus_path: opencost/, upstream_url: "https://opencost.github.io/opencost-helm-chart", upstream_host: opencost.github.io }
+  - { name: kafka-ui, nexus_path: kafka-ui/, upstream_url: "https://provectus.github.io/kafka-ui-charts", upstream_host: provectus.github.io }
+  - { name: chaos-mesh, nexus_path: chaos-mesh/, upstream_url: "https://charts.chaos-mesh.org", upstream_host: charts.chaos-mesh.org }
+  - { name: kubevious, nexus_path: kubevious/, upstream_url: "https://helm.kubevious.io", upstream_host: helm.kubevious.io }
+  - { name: external-secrets, nexus_path: external-secrets/, upstream_url: "https://external-secrets.io", upstream_host: external-secrets.io, chart_hosts: [github.com] }
+  - { name: external-dns, nexus_path: external-dns/, upstream_url: "https://kubernetes-sigs.github.io/external-dns", upstream_host: kubernetes-sigs.github.io }
+  - { name: jaegertracing, nexus_path: jaegertracing/, upstream_url: "https://jaegertracing.github.io/helm-charts", upstream_host: jaegertracing.github.io }
+  - { name: open-telemetry, nexus_path: open-telemetry/, upstream_url: "https://open-telemetry.github.io/opentelemetry-helm-charts", upstream_host: open-telemetry.github.io }
+  - { name: cnpg, nexus_path: cnpg/, upstream_url: "https://cloudnative-pg.io/charts", upstream_host: cloudnative-pg.io, chart_hosts: [github.com] }
+  - { name: headlamp, nexus_path: headlamp/, upstream_url: "https://kubernetes-sigs.github.io/headlamp/", upstream_host: kubernetes-sigs.github.io }
+  - { name: thanos-community, nexus_path: thanos-community, upstream_url: "https://thanos-community.github.io/helm-charts", upstream_host: thanos-community.github.io }
+  - { name: kyverno, nexus_path: kyverno/, upstream_url: "https://kyverno.github.io/kyverno/", upstream_host: kyverno.github.io }
+  - { name: policy-reporter, nexus_path: policy-reporter/, upstream_url: "https://kyverno.github.io/policy-reporter", upstream_host: kyverno.github.io }
+  - { name: mailu, nexus_path: mailu/, upstream_url: "https://mailu.github.io/helm-charts", upstream_host: mailu.github.io }
+
+helm_repos:
+  - { name: oauth2-proxy, path: oauth2-proxy }
+  - { name: falcosecurity, path: falco }
+  - { name: projectcalico, path: calico }
+  - { name: metallb, path: metallb }
+  - { name: prometheus-community, path: prometheus-community }
+  - { name: ceph-csi-operator, path: rook-ceph-csi-operator }
+  - { name: rook-release, path: rook-release }
+  - { name: fluent, path: fluent }
+  - { name: elastic, path: helm.elastic.local/ }
+  - { name: hashicorp, path: helm.releases.hashicorp.com/ }
+  - { name: istio, path: istio/ }
+  - { name: kiali, path: kiali/ }
+  - { name: argo, path: argo/ }
+  - { name: codecentric, path: codecentric/ }
+  - { name: sentry, path: sentry/ }
+  - { name: jetstack, path: jetstack/ }
+  - { name: kong-z, path: kong-z/ }
+  - { name: metrics-server, path: metrics-server/ }
+  - { name: aquasecurity, path: aquasecurity/ }
+  - { name: kubecost, path: kubecost/ }
+  - { name: opencost, path: opencost/ }
+  - { name: kafka-ui, path: kafka-ui/ }
+  - { name: chaos-mesh, path: chaos-mesh/ }
+  - { name: kubevious, path: kubevious/ }
+  - { name: external-secrets, path: external-secrets/ }
+  - { name: external-dns, path: external-dns/ }
+  - { name: jaegertracing, path: jaegertracing/ }
+  - { name: open-telemetry, path: open-telemetry/ }
+  - { name: cnpg, path: cnpg/ }
+  - { name: headlamp, path: headlamp/ }
+  - { name: thanos-community, path: thanos-community }
+  - { name: kyverno, path: kyverno/ }
+  - { name: policy-reporter, path: policy-reporter/ }
+  - { name: mailu, path: mailu/ }
+# Remaining namespaces: 210_helm_bootstrap; list below = needed before helm (secrets/prepare)
+# Helm --create-namespace: tracing, falco, istio-system, vault, chaos-mesh, argo-rollouts, oauth2-proxy, cnpg-system, headlamp, kyverno, policy-reporter, pinniped, mailu, trivy-system, opencost
+k8s_platform_namespaces:
+  - "{{ monitoring_namespace }}"
+  - "{{ logging_namespace }}"
+  - "{{ keycloak_namespace }}"
+  - "{{ argocd_namespace }}"
+  - "{{ cert_manager_namespace }}"
+
+# --- Upstream workarounds (remove when fixed upstream) ---
+# Calico OSS: audit-logging VWC without handler → kube-apiserver noise; suppress in Fluent Bit.
+fluentbit_suppress_calico_audit_webhook_noise: true
+# kube-apiserver /metrics: etcd health on every scrape → cancelled dial noise.
+prometheus_kube_apiserver_scrape_interval: 60s
+# ceph-csi-drivers <=1.0.1: missing volumeattributesclasses RBAC (csi-resizer, K8s 1.29+).
+rook_csi_volumeattributesclass_rbac: true
+
+# --- 220_calico (atlas-k8s-addons) ---
+calico_operator_namespace: tigera-operator
+calico_system_namespace: calico-system
+# Dataplane: eBPF (linuxDataplane=BPF in calico.yaml; BGP off, encapsulation VXLANCrossSubnet).
+calico_linux_dataplane: BPF
+calico_bgp: Disabled
+calico_ip_pool_encapsulation: VXLANCrossSubnet
+# CRDs: helm template calico-crds projectcalico/projectcalico.org.v3 --version <calico_chart_version>
+# On calico_chart_version change: re-apply CRDs + helm upgrade -f calico.yaml (no --reuse-values).
+calico_chart_version: "v3.32.0"
+calico_chart_state: present
+
+# --- 310_prometheus ---
+monitoring_namespace: monitoring
+prometheus_chart_version: ""
+prometheus_chart_state: present
+# grafana_admin_password → atlas-k8s-addons.secrets.yml
+grafana: admin
+grafana_dashboards_timezone: UTC
+# grafana_host / alertmanager_host — see 560_apply_ingress
+# alertmanager_smtp_password → atlas-k8s-addons.secrets.yml
+alertmanager_mail:
+  use_tls: true
+  host: smtp.example.com
+  port: 587
+  username: alertmanager@example.com
+  from: alertmanager@example.com
+  to: ops@example.com
+  insecure_skip_verify: false
+# Per-entity dashboard origin for 310_prometheus (grafana.dashboards + Calico Typha get_url).
+# github = https://raw.githubusercontent.com/<path>
+# grafana = grafana.com gnetId (grafana-native)
+# infra = grafana_dashboard_infra_base + github path or /api/dashboards/{id}/revisions/{rev}/download
+# github-native: github|infra; grafana-native: grafana|infra (130_validate_vars).
+grafana_dashboard_infra_base: ""
+grafana_dashboard_source:
+  # github-native (JSON in git; path after the origin is unchanged)
+  istio: github
+  ceph: github
+  envoy: github
+  thanos: github
+  falco: github
+  cnpg: github
+  keycloak: github
+  argocd: github
+  argo_rollouts: github
+  external_secrets: github
+  jaeger: github
+  calico_typha: github
+  # grafana-native (no JSON in git; Helm gnetId or infra url)
+  calico: grafana
+  metallb: grafana
+  vault: grafana
+  fluentbit: grafana
+  cert_manager: grafana
+  elasticsearch: grafana
+  blackbox: grafana
+  consul: grafana
+  external_dns: grafana
+  chaos_mesh: grafana
+  opentelemetry: grafana
+  trivy: grafana
+  opencost: grafana
+
+# --- 320_blackbox ---
+blackbox_exporter_chart_version: ""
+blackbox_exporter_chart_state: present
+# (ingress: see k8s_ingress_apps.blackbox)
+
+# --- 330_prometheus_adapter ---
+# Resource metrics.k8s.io for HPA. containerQuery and nodeQuery skip cAdvisor
+# pause/pod cgroup (container!="", container!="POD"). nodeQuery uses label node
+# (not instance, not id=/ — cgroup v2 has no root series).
+prometheus_adapter_chart_version: ""
+prometheus_adapter_chart_state: present
+
+# --- 340_calico_metrics ---
+# (role has no dedicated vars)
+
+# --- 410_snapshotter ---
+# github        — public upstream kubernetes-csi/external-snapshotter (git clone on master)
+# private-git   — user fork: set snapshotter_repo
+# internal-nginx — kustomize over HTTPS from custom nginx, no git on cluster
+get_snapshotter: github
+setup_custom_nginx: false
+snapshotter_version: 8.6.0
+snapshotter_github_repo: https://github.com/kubernetes-csi/external-snapshotter.git
+# private-git only: e.g. https://git.example.com/user/external-snapshotter.git
+snapshotter_repo: ""
+external_snapshotter_dir: "{{ k8s_manifests_dir }}/external-snapshotter"
+# Derived: do not override manually (130_validate_vars will fail)
+setup_custom_content_nginx: "{{ get_snapshotter == 'internal-nginx' and setup_custom_nginx }}"
+snapshotter_effective_repo: >-
+  {{ snapshotter_github_repo if get_snapshotter == 'github' else snapshotter_repo }}
+snapshotter_kustomize_base_url: >-
+  https://{{ custom_nginx_ingress_domain }}/external-snapshotter/v{{ snapshotter_version }}
+custom_nginx_content:
+  - name: external-snapshotter
+    source_repo: "{{ snapshotter_github_repo }}"
+    version: "{{ snapshotter_version }}"
+    sync_paths:
+      - client
+      - deploy/kubernetes
+    dest_subdir: "external-snapshotter/v{{ snapshotter_version }}"
+snapshotter_archive_filename: "external-snapshotter-v{{ snapshotter_version }}.tar.gz"
+snapshotter_archive_url: "https://{{ custom_nginx_ingress_domain }}/{{ snapshotter_archive_filename }}"
+
+# --- 420_rook_operator, 430_rook_cluster, 440_rook_csi_drivers ---
+rook_operator_namespace: rook-ceph
+rook_cluster_namespace: rook-ceph-cluster
+rook_operator_chart_version: ""
+rook_operator_chart_state: present
+rook_cluster_chart_version: ""
+rook_cluster_chart_state: present
+rook_csi_drivers_chart_version: ""
+rook_csi_drivers_chart_state: present
+# Ceph mon TOO_MANY_PGS threshold (string in CephCluster.spec.cephConfig.global).
+# Default 250 trips on 3-OSD labs with RBD+CephFS+RGW (~265 PG/OSD). Raises the
+# warn bar only; does not resize pools. Empty = omit (Ceph default 250).
+rook_mon_max_pg_per_osd: "500"
+# RGW HTTPS (self-signed) so Thanos/minio-go does not STREAMING-AWS4 PutObject over HTTP.
+rook_objectstore_name: ceph-objectstore
+rook_rgw_https_secret: rook-ceph-rgw-tls
+rook_rgw_secure_port: 443
+
+# --- 450_thanos ---
+# Community chart (GitHub Pages, not Bitnami/OCI). Prometheus remote_write -> Receive; no sidecar.
+# Grafana default stays Prometheus; Query is an additional datasource. Adapter/HPA stay on Prometheus.
+# Objstore uses RGW :443 (not OBC BUCKET_PORT 80). OBC BUCKET_REGION is often empty — default us-east-1.
+thanos_chart_version: "0.32.0"
+thanos_chart_state: present
+thanos_objstore_secret: thanos-objstore
+thanos_obc_name: thanos-blocks
+thanos_storage_class: ceph-bucket
+thanos_s3_region: us-east-1
+thanos_s3_endpoint_port: 443
+thanos_s3_insecure: false
+thanos_s3_tls_insecure_skip_verify: true
+thanos_pvc_storage_class: ceph-block
+thanos_receive_replicas: 1
+thanos_query_replicas: 1
+thanos_store_replicas: 1
+thanos_receive_pvc_size: 10Gi
+thanos_store_pvc_size: 8Gi
+thanos_compactor_pvc_size: 10Gi
+thanos_compactor_retention_raw: 30d
+thanos_compactor_retention_5m: 60d
+thanos_compactor_retention_1h: 90d
+thanos_receive_tsdb_retention: 24h
+thanos_prometheus_retention: 24h
+thanos_query_http_url: "http://thanos-query.{{ monitoring_namespace }}.svc.{{ k8s_dns_domain }}:9090"
+thanos_receive_remote_write_url: "http://thanos-receive.{{ monitoring_namespace }}.svc.{{ k8s_dns_domain }}:10908/api/v1/receive"
+
+# --- 510_metallb ---
+metallb_namespace: metallb-system
+metallb_chart_version: "0.16.1"
+metallb_chart_state: present
+metallb_ip_pool: "192.168.1.150-192.168.1.199"
+
+# --- 520_envoy_gateway ---
+envoy_gateway_namespace: envoy-gateway-system
+envoy_gateway_chart_oci: oci://docker.io/envoyproxy/gateway-helm
+envoy_gateway_chart_version: "v1.8.3"
+envoy_gateway_chart_state: present
+envoy_gateway_release_name: eg
+envoy_gateway_gatewayclass_name: eg
+envoy_gateway_gateway_name: atlas
+envoy_gateway_proxy_name: atlas-proxy
+envoy_gateway_wildcard_secret: atlas-wildcard-tls
+ingress_lb_ip: 192.168.1.199
+
+# --- 530_external_dns ---
+external_dns_namespace: external-dns
+external_dns_chart_version: ""
+external_dns_chart_state: present
+# dns_server_ip — BIND / DNS that receives external-dns updates
+external_dns_txt_owner_id: k8s   unique per cluster (external-dns txtOwnerId)
+external_dns_apex_txt_owner_id: k8s-apex
+# external_dns_tsig_secret / external_dns_apex_tsig_secret → atlas-k8s-addons.secrets.yml
+# Apex TSIG = BIND bind_zones.apex (provision_dns_key_secret). Child k8s zone uses external_dns_tsig_secret.
+
+# --- 540_cert_manager ---
+cert_manager_namespace: cert-manager
+cert_manager_chart_version: ""
+cert_manager_chart_state: present
+k8s_certmanager_cluster_manifest: certmanager-cluster.yaml
+# external_dns_tsig_secret — see 530_external_dns
+
+# --- 550_trust_manager ---
+trust_manager_chart_version: ""
+trust_manager_chart_state: present
+
+# --- 560_apply_ingress ---
+# External hosts: single source of truth — *_host.
+# k8s_ingress_apps — Gateway API HTTPRoute/TLSRoute generator (560_apply_ingress).
+# oidc_auth HTTPRoutes are applied by 961_apply_oidc_ingress after the Keycloak realm (not in 560).
+# Service:port pinned from chart fullnameOverride / Helm release / values:
+#   jaeger:16686 (fullnameOverride jaeger), falco-falcosidekick-ui:2802 (release falco),
+#   chaos-dashboard:2333.
+keycloak_realm: atlas
+falco_host: "falco.{{ k8s_cluster_domain }}"
+jaeger_host: "jaeger.{{ k8s_cluster_domain }}"
+kiali_host: "kiali.{{ k8s_cluster_domain }}"
+headlamp_host: "headlamp.{{ k8s_cluster_domain }}"
+policy_reporter_host: "policy-reporter.{{ k8s_cluster_domain }}"
+prometheus_host: "prometheus.{{ k8s_cluster_domain }}"
+alertmanager_host: "alertmanager.{{ k8s_cluster_domain }}"
+grafana_host: "k8s-grafana.{{ k8s_cluster_domain }}"
+rook_host: "rook.{{ k8s_cluster_domain }}"
+argocd_host: "argo.{{ k8s_cluster_domain }}"
+argo_rollouts_host: "rollouts.{{ k8s_cluster_domain }}"
+vault_host: "vault.{{ k8s_cluster_domain }}"
+chaos_mesh_host: "chaos-mesh.{{ k8s_cluster_domain }}"
+opencost_host: "opencost.{{ k8s_cluster_domain }}"
+pinniped_host: "pinniped.{{ k8s_cluster_domain }}"
+pinniped_login_host: "pinniped-login.{{ k8s_cluster_domain }}"
+mailu_host: "mail.{{ k8s_cluster_domain }}"
+mailu_mx_host: "smtp.{{ k8s_cluster_domain }}"
+blackbox_host: "blackbox.{{ k8s_cluster_domain }}"
+keycloak_host: "keycloak.{{ k8s_cluster_domain }}"
+keycloak_url: "https://{{ keycloak_host }}"
+oidc_issuer_url: "{{ keycloak_url }}/auth/realms/{{ keycloak_realm }}"
+oauth2_host: "oauth2.{{ k8s_cluster_domain }}"
+oauth2_callback_url: "https://{{ oauth2_host }}/oauth2/callback"
+oauth2_signout_url: "https://{{ oauth2_host }}/oauth2/sign_out"
+elasticsearch_host: "elasticsearch.{{ k8s_cluster_domain }}"
+kibana_host: "kibana.{{ k8s_cluster_domain }}"
+k8s_ingress_apps:
+  - name: kibana
+    chart_state_var: kibana_chart_state
+    host: "{{ kibana_host }}"
+    namespace: "{{ logging_namespace }}"
+    service: kibana-kibana
+    port: 5601
+    tls: false
+    ssl_passthrough: true
+    backend_protocol: HTTPS
+
+  - name: elasticsearch-master
+    chart_state_var: elasticsearch_chart_state
+    host: "{{ elasticsearch_host }}"
+    namespace: "{{ logging_namespace }}"
+    service: elasticsearch-master
+    port: 9200
+    tls: false
+    ssl_passthrough: true
+    backend_protocol: HTTPS
+
+  - name: prometheus-kube-prometheus-prometheus
+    chart_state_var: prometheus_chart_state
+    host: "{{ prometheus_host }}"
+    namespace: "{{ monitoring_namespace }}"
+    service: prometheus-kube-prometheus-prometheus
+    port: 9090
+
+  - name: prometheus-kube-prometheus-alertmanager
+    chart_state_var: prometheus_chart_state
+    host: "{{ alertmanager_host }}"
+    namespace: "{{ monitoring_namespace }}"
+    service: prometheus-kube-prometheus-alertmanager
+    port: 9093
+    oidc_auth: true
+
+  - name: grafana-ingress
+    chart_state_var: prometheus_chart_state
+    host: "{{ grafana_host }}"
+    namespace: "{{ monitoring_namespace }}"
+    service: prometheus-grafana
+    port: 80
+    profile: grafana
+    oidc_auth: true
+
+  - name: rook-ceph-mgr-dashboard
+    chart_state_var: rook_cluster_chart_state
+    host: "{{ rook_host }}"
+    namespace: "{{ rook_cluster_namespace }}"
+    service: rook-ceph-mgr-dashboard
+    port: 7000
+    profile: rook
+
+  - name: keycloak-http
+    chart_state_var: keycloak_chart_state
+    host: "{{ keycloak_host }}"
+    namespace: "{{ keycloak_namespace }}"
+    service: keycloak-http
+    port: 80
+
+  - name: argocd-server-ingress
+    chart_state_var: argocd_chart_state
+    host: "{{ argocd_host }}"
+    namespace: "{{ argocd_namespace }}"
+    service: argocd-server
+    port: 80
+
+  - name: argo-rollouts-dashboard
+    chart_state_var: argo_rollouts_chart_state
+    host: "{{ argo_rollouts_host }}"
+    namespace: "{{ argo_rollouts_namespace }}"
+    service: argo-rollouts-dashboard
+    port: 3100
+    oidc_auth: true
+
+  - name: pinniped-supervisor
+    chart_state_var: pinniped_chart_state
+    host: "{{ pinniped_host }}"
+    namespace: "{{ pinniped_namespace }}"
+    service: "{{ pinniped_supervisor_service }}"
+    port: 443
+    ssl_passthrough: true
+    backend_protocol: HTTPS
+
+  - name: pinniped-login
+    chart_state_var: pinniped_chart_state
+    host: "{{ pinniped_login_host }}"
+    namespace: "{{ pinniped_namespace }}"
+    service: "{{ pinniped_login_service }}"
+    port: 80
+    oidc_auth: true
+
+  - name: mailu
+    chart_state_var: mailu_chart_state
+    host: "{{ mailu_host }}"
+    namespace: "{{ mailu_namespace }}"
+    service: mailu-front
+    port: 80
+    oidc_auth: true
+
+  - name: blackbox
+    chart_state_var: blackbox_exporter_chart_state
+    host: "{{ blackbox_host }}"
+    namespace: "{{ monitoring_namespace }}"
+    service: blackbox-exporter-prometheus-blackbox-exporter
+    port: 9115
+
+  - name: oauth2-proxy
+    chart_state_var: oauth2_proxy_chart_state
+    host: "{{ oauth2_host }}"
+    namespace: "{{ oauth2_proxy_namespace }}"
+    service: oauth2-proxy
+    port: 80
+
+  - name: headlamp
+    chart_state_var: headlamp_chart_state
+    host: "{{ headlamp_host }}"
+    namespace: "{{ headlamp_namespace }}"
+    service: headlamp
+    port: 80
+    oidc_auth: true
+
+  - name: vault
+    chart_state_var: vault_chart_state
+    host: "{{ vault_host }}"
+    namespace: "{{ vault_namespace }}"
+    service: vault
+    port: 8200
+
+  - name: kiali
+    chart_state_var: kiali_chart_state
+    host: "{{ kiali_host }}"
+    namespace: "{{ istio_namespace }}"
+    service: kiali
+    port: 20001
+    oidc_auth: true
+
+  - name: jaeger
+    chart_state_var: jaeger_chart_state
+    host: "{{ jaeger_host }}"
+    namespace: "{{ tracing_namespace }}"
+    service: jaeger
+    port: 16686
+
+  - name: falco
+    chart_state_var: falco_chart_state
+    host: "{{ falco_host }}"
+    namespace: "{{ falco_namespace }}"
+    service: falco-falcosidekick-ui
+    port: 2802
+
+  - name: policy-reporter
+    chart_state_var: policy_reporter_chart_state
+    host: "{{ policy_reporter_host }}"
+    namespace: "{{ policy_reporter_namespace }}"
+    service: policy-reporter-ui
+    port: 8080
+    oidc_auth: true
+
+  - name: chaos-dashboard
+    chart_state_var: chaos_mesh_chart_state
+    host: "{{ chaos_mesh_host }}"
+    namespace: "{{ chaos_mesh_namespace }}"
+    service: chaos-dashboard
+    port: 2333
+
+  - name: opencost
+    chart_state_var: opencost_chart_state
+    host: "{{ opencost_host }}"
+    namespace: "{{ opencost_namespace }}"
+    service: opencost
+    port: 9090
+    oidc_auth: true
+
+# --- 610_elasticsearch_prepare, 620_elasticsearch ---
+elasticsearch_chart_version: ""
+elasticsearch_chart_state: present
+logging_namespace: logging
+elastic_es_output_host: elasticsearch-master
+elastic_es_output_port: 9200
+ESimageTag: "9.4.2"
+# elastic_password → atlas-k8s-addons.secrets.yml
+# elastic_cert_password → atlas-k8s-addons.secrets.yml
+# elastic_logger_password → atlas-k8s-addons.secrets.yml
+# elastic_admin_password → atlas-k8s-addons.secrets.yml
+# elastic_jaeger_password → atlas-k8s-addons.secrets.yml
+elastic_superuser: elastic
+elastic_logger: logger
+elastic_admin: admin
+elastic_jaeger: jaeger
+# Daily kube-logs-*/host-logs-* ILM delete (no rollover). replicas 0 for 1-node ES.
+elasticsearch_ilm_delete_after: 7d
+elasticsearch_logs_index_replicas: 0
+# SLM to Rook RGW via ObjectBucketClaim (access keys from the Rook Secret, not this overlay).
+# rook-rgw | external-s3 | none. Snapshots share Ceph with the ES PVC (not offsite DR).
+elasticsearch_snapshot_backend: rook-rgw
+elasticsearch_snapshot_storage_class: ceph-bucket
+elasticsearch_snapshot_obc_name: elasticsearch-snapshots
+elasticsearch_snapshot_repo_name: atlas-logs
+elasticsearch_slm_schedule: "0 30 1 * * ?"
+elasticsearch_slm_expire_after: 30d
+# external-s3 only; omit for rook-rgw.
+# elasticsearch_snapshot_s3_access_key / elasticsearch_snapshot_s3_secret_key → atlas-k8s-addons.secrets.yml
+elasticsearch_snapshot_s3_endpoint: ""
+elasticsearch_snapshot_s3_bucket: ""
+elasticsearch_snapshot_s3_protocol: https
+
+# --- 630_kibana_prepare, 640_kibana ---
+kibana_chart_version: "8.5.1"
+kibana_chart_state: present
+KibanaimageTag: "9.4.2"
+kibana_chart_artifact: "kibana-{{ kibana_chart_version }}.tgz"
+# kibana_encryption_key → atlas-k8s-addons.secrets.yml
+# kibana_elastic_password → atlas-k8s-addons.secrets.yml
+
+# --- 650_fluentbit ---
+fluentbit_chart_version: ""
+fluentbit_chart_state: present
+# Cheap gate before kubernetes/Lua (error/warn/crit or allowlist ns). false + empty
+# exclude list = old full ingest. Lua still stamps atlas_severity on survivors.
+fluentbit_early_severity_gate: true
+# CRI files never opened (even errors). Ceph/chaos health is Grafana.
+fluentbit_kube_tail_exclude_namespaces:
+  - rook-ceph
+  - rook-ceph-cluster
+  - chaos-mesh
+# Full log lines (all severities) for these CRI namespaces.
+fluentbit_kube_full_namespaces:
+  - falco
+  - logging
+  - kube-system
+# Lua safety net for non-allowlist: false = drop info. Allowlist ns always keep info.
+# Expect 10–100× ES volume vs error-only if gate is off; ILM still elasticsearch_ilm_delete_after (7d).
+fluentbit_index_info_logs: true
+fluentbit_host_syslog_tail: true
+fluentbit_host_syslog_paths: "/var/log/messages,/var/log/syslog"
+# Poison ES bulk must not retry forever (False = unlimited). Trace_Error logs HTTP body.
+fluentbit_es_retry_limit: 5
+fluentbit_es_trace_error: true
+# fluentbit_suppress_calico_audit_webhook_noise — see Upstream workarounds
+# elastic_logger — see 620_elasticsearch
+
+# --- 710_istio ---
+istio_namespace: istio-system
+istio_chart_version: "1.30.3"
+istio_chart_state: present
+istio_version: 1.30.3
+# Istio container images (override hub for air-gapped mirrors)
+istio_image_hub: docker.io/istio
+istio_image_tag: "1.30.3"   # set to '' for :latest; omit to fall back to istio_version
+# Mesh-wide Telemetry in istio_namespace: provider otel-tracing. Lab default 100; lower in prod.
+istio_tracing_sampling_percentage: 100
+
+# --- 720_external_dns_istio ---
+external_dns_istio_chart_version: ""
+external_dns_istio_chart_state: present
+istio_ingress_lb_ip: 192.168.1.198
+# external_dns_istio_tsig_secret → atlas-k8s-addons.secrets.yml
+
+# --- 730_tracing ---
+tracing_namespace: tracing
+jaeger_chart_version: "4.12.0"
+jaeger_chart_state: present
+opentelemetry_collector_chart_version: ""
+opentelemetry_collector_chart_state: present
+otel_collector_image: otel/opentelemetry-collector-contrib
+
+# --- 740_kiali ---
+kiali_operator_namespace: kiali-operator
+kiali_chart_version: ""
+kiali_chart_state: present
+# UI: Envoy SecurityPolicy (envoy-gateway), CR auth.strategy anonymous.
+# HTTPRoute after 961 (560 skips oidc_auth). grafana_admin_password, grafana — see 310_prometheus
+
+# --- 800_chaos_mesh ---
+chaos_mesh_namespace: chaos-mesh
+chaos_mesh_chart_version: ""
+chaos_mesh_chart_state: present
+
+# --- 810_falco ---
+falco_namespace: falco
+falco_chart_version: ""
+falco_chart_state: present
+
+# --- 820_kyverno ---
+# Chart kyverno/kyverno. Engine only; ClusterPolicy not in this role. No ingress.
+# Play: after 810_falco, before 830_policy_reporter.
+kyverno_namespace: kyverno
+kyverno_chart_version: ""
+kyverno_chart_state: present
+
+# --- 830_policy_reporter ---
+# Chart policy-reporter/policy-reporter. UI + Kyverno plugin. HTTPRoute after 961 (560 skips oidc_auth).
+policy_reporter_namespace: policy-reporter
+policy_reporter_chart_version: ""
+policy_reporter_chart_state: present
+
+# --- 980_argocd ---
+argocd_namespace: argocd
+argocd_chart_version: ""
+argocd_chart_state: present
+# argocd_admin_password_bcrypt → atlas-k8s-addons.secrets.yml
+# argocd_oidc_client_secret → atlas-k8s-addons.secrets.yml (Keycloak client argocd)
+# OIDC login: Keycloak group argocd-admins. Local admin remains break-glass. HTTPRoute has no oidc_auth.
+
+# --- 982_argocd_rollouts ---
+argo_rollouts_namespace: argo-rollouts
+argo_rollouts_chart_version: ""
+argo_rollouts_chart_state: present
+# Chart argo/argo-rollouts. UI: Envoy SecurityPolicy (envoy-gateway); chart has no auth.
+# HTTPRoute after 961 (560 skips oidc_auth).
+
+# --- 910_cloudnative_pg ---
+cnpg_operator_namespace: cnpg-system
+cnpg_cluster_namespace: cnpg
+cnpg_cluster_name: postgres
+cnpg_cluster_instances: 1
+cnpg_cluster_storage: 8Gi
+cnpg_chart_version: "0.29.0"
+cnpg_chart_state: present
+
+# --- 962_headlamp ---
+headlamp_namespace: headlamp
+headlamp_chart_version: "0.44.0"
+headlamp_chart_state: present
+
+keycloak_namespace: keycloak
+keycloak_chart_version: "7.2.2"
+keycloak_chart_state: present
+keycloak_cnpg_cluster_name: keycloak-pg
+keycloak_cnpg_instances: 1
+keycloak_cnpg_storage: 8Gi
+# keycloak_admin_password → atlas-k8s-addons.secrets.yml
+# keycloak_realm, keycloak_host, keycloak_url — see 560_apply_ingress
+
+# --- 930_keycloak_realm ---
+# keycloak_tf_workspace — controller-state/staging/keycloak-realm
+# keycloak_tf_plugin_dir — local plugin mirror (lab: /usr/local/share/terraform/plugins)
+# keycloak_tf_provider_version — pin shared with roles/930_keycloak_realm/templates/main.tf.j2
+# Realm OIDC test user (Envoy X-Auth-Request-Email / Mailu proxyAuth). Distinct
+# from Mailu initialAccount admin@ and from Keycloak master admin.
+keycloak_oidc_username: admin
+keycloak_oidc_user_email: "admin-oidc@{{ dns_domain_suffix }}"
+keycloak_oidc_user_first_name: Admin
+keycloak_oidc_user_last_name: OIDC
+# keycloak_oidc_user_password → atlas-k8s-addons.secrets.yml
+# oauth2_proxy_client_secret → atlas-k8s-addons.secrets.yml
+# envoy_gateway_oidc_client_secret → atlas-k8s-addons.secrets.yml
+# vault_oidc_client_secret → atlas-k8s-addons.secrets.yml
+# argocd_oidc_client_secret → atlas-k8s-addons.secrets.yml
+
+# --- 940_apiserver_oidc ---
+# kube-apiserver JWT after Keycloak exists. Off in sibling catalog (no IdP on
+# standalone addons). Leaf overlay sets kube_apiserver_oidc_enabled: true only —
+# do not copy kube_oidc_* onto the leaf (extra-vars overlay is the SoT;
+# 130_validate_vars loads these defaults and binds issuer from oidc_issuer_url).
+# Do not enable at kubeadm init. Runs after 930, before 941 kubeconfig.oidc.
+kube_apiserver_oidc_enabled: false
+kube_oidc_client_id: kubernetes
+kube_oidc_username_claim: preferred_username
+kube_oidc_username_prefix: "-"
+kube_oidc_groups_claim: groups
+kube_oidc_ca_file: /etc/kubernetes/pki/oidc-ca.crt
+kube_oidc_issuer_url: "{{ oidc_issuer_url | default('') }}"
+kube_oidc_kubeadm_config: /etc/kubernetes/kubeadm-oidc.yaml
+
+# --- 941_k8s_oidc ---
+# Public Keycloak client kubernetes + group k8s-admins (71). No client secret.
+# kubeconfig: {{ controller_kubeconfig }}.oidc (kubectl oidc-login / kubelogin).
+# Runs after 940 so the API already has OIDC flags. Controller stays on admin.conf;
+# install kubectl-oidc_login on the client PATH. Gated by kube_apiserver_oidc_enabled.
+k8s_oidc_group: k8s-admins
+k8s_oidc_clusterrolebinding: oidc-k8s-admins
+
+# --- 942_pinniped ---
+# Supervisor + Concierge (official YAML in roles/942_pinniped/chart, not Bitnami).
+# Keycloak is the upstream IdP (confidential client pinniped-supervisor).
+# 81/79 stay as kubelogin break-glass. Controller writes ….pinniped via pinniped CLI.
+# Download UI: https://pinniped-login.<cluster> (Envoy OIDC, same as Headlamp).
+pinniped_chart_state: present
+pinniped_chart_version: ""
+pinniped_version: v0.47.0
+pinniped_namespace: pinniped
+pinniped_supervisor_service: pinniped-supervisor
+pinniped_https_secret: pinniped-supervisor-https
+pinniped_oidc_client_id: pinniped-supervisor
+pinniped_oidc_client_secret_name: pinniped-supervisor-oidc-client
+pinniped_idp_name: keycloak
+pinniped_jwtauthenticator: supervisor
+pinniped_kubeconfig: "{{ controller_kubeconfig }}.pinniped"
+pinniped_login_service: pinniped-login
+pinniped_login_kubeconfig_secret: pinniped-login-kubeconfig
+pinniped_login_image: nginx:1.27-alpine
+# pinniped_host / pinniped_login_host — see 560_apply_ingress
+# pinniped_supervisor_client_secret → atlas-k8s-addons.secrets.yml
+
+# --- 950_mailu ---
+# Official chart mailu/mailu. No native OIDC: Envoy SecurityPolicy (72) + proxyAuth.
+# Web: mailu_host HTTPRoute :80 (TLS_FLAVOR=mail; Envoy terminates TLS). SMTP/IMAP: mailu_mx_host A on MetalLB.
+# MX {{ mailu_domain }} → mailu_mx_host via 42 external-dns-apex (DNSEndpoint). IMAP/SMTP stay password / app token.
+# sessionTimeout = permanentSessionLifetime (30d): webmail IMAP token follows Flask Redis session.
+# admin dnsPolicy None → mailu-unbound (DNSSEC AD). Pinned ClusterIP, no hostAliases.
+mailu_namespace: mailu
+mailu_chart_version: "2.7.3"
+mailu_chart_state: present
+mailu_domain: "{{ dns_domain_suffix }}"
+mailu_lb_ip: ""
+mailu_clamav_enabled: true
+mailu_initial_username: admin
+mailu_https_secret: mailu-tls
+mailu_secret_name: mailu-secret
+mailu_unbound_cluster_ip: 10.0.0.53
+mailu_unbound_image: ghcr.io/mailu/unbound:2024.06.55
+# mailu_host / mailu_mx_host — see 560_apply_ingress
+# mailu_secret_key / mailu_initial_password → atlas-k8s-addons.secrets.yml
+
+# --- 840_trivy ---
+# Chart aquasecurity/trivy-operator. No UI; CR reports + Prometheus/Grafana (gnet 17813, 16337).
+# Scans kube-system only. Play: after 830_policy_reporter, before 910_cloudnative_pg.
+trivy_namespace: trivy-system
+trivy_chart_version: "0.36.0"
+trivy_chart_state: present
+
+# --- 954_opencost ---
+# Chart opencost/opencost. UI via Envoy OIDC (961); chart Ingress/HTTPRoute off.
+# Queries kube-prometheus-stack in monitoring. Play: after 840_trivy, before 960_oauth2_proxy.
+opencost_namespace: opencost
+opencost_chart_version: "2.5.30"
+opencost_chart_state: present
+
+# --- 960_oauth2_proxy ---
+oauth2_proxy_namespace: oauth2-proxy
+oauth2_proxy_chart_version: ""
+oauth2_proxy_chart_state: present
+# oauth2_proxy_cookie_secret → atlas-k8s-addons.secrets.yml
+# envoy_gateway_oidc_client_secret → atlas-k8s-addons.secrets.yml
+# oauth2_host, oauth2_callback_url, oauth2_signout_url, oidc_issuer_url — see 560_apply_ingress
+# oauth2_proxy_client_secret — see 930_keycloak_realm
+
+# --- 961_apply_oidc_ingress ---
+# HTTPRoute + Envoy SecurityPolicy for k8s_ingress_apps with oidc_auth.
+# No extra knobs; runs after 960, independent of oauth2_proxy_chart_state.
+
+# --- 970_consul ---
+vault_namespace: vault
+consul_chart_version: ""
+consul_chart_state: present
+consul_server_replicas: 3
+# Consul is Vault KV storage (server-only). connectInject/client stay off.
+
+# --- 971_vault ---
+vault_ha_replicas: 3  # 1 = standalone (vault-0); N>1 = HA StatefulSet
+vault_chart_version: ""
+vault_chart_state: present
+vault_admin: vault-admin
+# vault_admin_password → atlas-k8s-addons.secrets.yml
+# vault_oidc_client_secret → atlas-k8s-addons.secrets.yml (Keycloak client vault)
+# OIDC login: Keycloak group vault-admins. userpass {{ vault_admin }} remains break-glass.
+# Unseal keys SoT: /root/vault-init-keys.txt on k8s_masters via SSH plays
+# (chmod 600). Controller-state is a cache, not SoT.
+# Helm 4 upgrade --install uses --take-ownership --force-conflicts (SSA vs
+# vault-k8s on MutatingWebhookConfiguration caBundle). Do not delete the webhook.
+# (ingress in 971_vault/templates/vault.yaml.j2)
+
+# --- 972_external_secrets ---
+# Pin: ClusterSecretStore apiVersion external-secrets.io/v1 (chart 0.20.x, k8s ≥1.30).
+external_secrets_chart_version: "0.20.4"
+external_secrets_chart_state: present
+
+# --- 990_rook_ceph_dashboard ---
+ceph_dashboard: admin
+# ceph_dashboard_password → atlas-k8s-addons.secrets.yml
+
+# --- 992_kibana_dashboards ---
+kibana_dashboard: admin
+# kibana_elastic_password — see 640_kibana
+kibana_logs_system_namespaces:
+  - kube-system
+  - calico-system
+  - istio-system
+  - envoy-gateway-system
+  - monitoring
+  - logging
+  - rook-ceph
+  - rook-ceph-cluster
+  - falco
+  - kyverno
+  - vault
+  - cert-manager
+  - keycloak
+  - argocd
+  - kiali-operator
+  - chaos-mesh
+  - policy-reporter
+  - metallb-system
+  - oauth2-proxy
+  - external-dns
+  - argo-rollouts
+  - cnpg-system
+  - trivy-system
+  - opencost
+kibana_alert_ns_error_threshold: 200
+kibana_alert_apiserver_error_threshold: 50
+kibana_alert_falco_threshold: 50
+kibana_alert_ceph_error_threshold: 50
+
+# --- 994_sentry ---
+sentry_namespace: sentry
+sentry_chart_version: ""
+sentry_chart_state: skip
+
+# --- 996_cluster_report ---
+# cluster_credentials_file — YAML export path (role 97)
+# cluster_credentials_md_file — MD report path (role 97 defaults)
+# cluster_credentials_mode: full | summary (summary masks passwords in MD)
+# cluster_credentials_collect_runtime: true — read live secrets from cluster (kubectl)
+# cluster_credentials_include_infra: true — include BIND/repos notes in MD/YAML
+cluster_credentials_include_infra: true
+cluster_credentials_file: "{{ controller_reports_dir }}/cluster-credentials.yaml"
+cluster_credentials_md_file: "{{ controller_reports_dir }}/cluster-credentials.md"
+
+# sentry_smtp_password → atlas-k8s-addons.secrets.yml
+# sentry_admin_password → atlas-k8s-addons.secrets.yml
+sentry_mail:
+  backend: smtp
+  use_tls: true
+  host: smtp.example.com
+  port: 25
+  username: sentry@example.com
+  from: sentry@example.com
+sentry_admin_email: admin@example.com
+
+# --- optional addons namespaces (ServiceMonitor discovery for prometheus) ---
+graylog_namespace: graylog
+kubecost_namespace: kubecost
+# graylog_root_password → atlas-k8s-addons.secrets.yml
+
+# --- k8s_users: aggregate for role templates (values from sections above) ---
+k8s_users:
+  grafana: "{{ grafana }}"
+  kibana_dashboard: "{{ kibana_dashboard }}"
+  elastic_superuser: "{{ elastic_superuser }}"
+  elastic_logger: "{{ elastic_logger }}"
+  elastic_admin: "{{ elastic_admin }}"
+  elastic_jaeger: "{{ elastic_jaeger }}"
+  ceph_dashboard: "{{ ceph_dashboard }}"
+  vault_admin: "{{ vault_admin }}"
+
+# --- k8s_secrets: aggregate for role templates (values from sections above) ---
+k8s_secrets:
+  grafana_admin_password: "{{ grafana_admin_password }}"
+  alertmanager_smtp_password: "{{ alertmanager_smtp_password }}"
+  keycloak_admin_password: "{{ keycloak_admin_password }}"
+  keycloak_oidc_user_password: "{{ keycloak_oidc_user_password }}"
+  oauth2_proxy_client_secret: "{{ oauth2_proxy_client_secret }}"
+  oauth2_proxy_cookie_secret: "{{ oauth2_proxy_cookie_secret }}"
+  envoy_gateway_oidc_client_secret: "{{ envoy_gateway_oidc_client_secret }}"
+  vault_oidc_client_secret: "{{ vault_oidc_client_secret }}"
+  argocd_oidc_client_secret: "{{ argocd_oidc_client_secret }}"
+  pinniped_supervisor_client_secret: "{{ pinniped_supervisor_client_secret }}"
+  mailu_secret_key: "{{ mailu_secret_key }}"
+  mailu_initial_password: "{{ mailu_initial_password }}"
+  external_dns_tsig_secret: "{{ external_dns_tsig_secret }}"
+  external_dns_apex_tsig_secret: "{{ external_dns_apex_tsig_secret }}"
+  external_dns_istio_tsig_secret: "{{ external_dns_istio_tsig_secret }}"
+  ceph_dashboard_password: "{{ ceph_dashboard_password }}"
+  elastic_password: "{{ elastic_password }}"
+  elastic_cert_password: "{{ elastic_cert_password }}"
+  elastic_logger_password: "{{ elastic_logger_password }}"
+  elastic_admin_password: "{{ elastic_admin_password }}"
+  elastic_jaeger_password: "{{ elastic_jaeger_password }}"
+  kibana_elastic_password: "{{ kibana_elastic_password }}"
+  kibana_encryption_key: "{{ kibana_encryption_key }}"
+  argocd_admin_password_bcrypt: "{{ argocd_admin_password_bcrypt }}"
+  sentry_smtp_password: "{{ sentry_smtp_password }}"
+  sentry_admin_password: "{{ sentry_admin_password }}"
+  graylog_root_password: "{{ graylog_root_password }}"
+  vault_admin_password: "{{ vault_admin_password }}"

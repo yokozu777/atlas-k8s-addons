@@ -1,0 +1,3 @@
+---
+# Operator catalog: group_vars/all/atlas-k8s-addons.yml (deep knobs in role tasks/templates).
+consul_server_replicas: 3

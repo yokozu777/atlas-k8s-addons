@@ -1,0 +1,28 @@
+es:
+  uri: https://elasticsearch-master.{{ logging_namespace }}.svc.{{ k8s_dns_domain }}:9200
+  sslSkipVerify: true
+  all: true
+  indices: true
+  indices_settings: true
+  indices_mappings: true
+  shards: true
+  snapshots: true
+
+extraEnvSecrets:
+  ES_USERNAME:
+    secret: elastic-credentials
+    key: username
+  ES_PASSWORD:
+    secret: elastic-credentials
+    key: password
+
+serviceMonitor:
+  enabled: true
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi

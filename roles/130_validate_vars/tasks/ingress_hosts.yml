@@ -1,0 +1,28 @@
+---
+- name: Assert ingress host variables are set
+  ansible.builtin.assert:
+    that:
+      - falco_host | default('') | length > 0
+      - jaeger_host | default('') | length > 0
+      - kiali_host | default('') | length > 0
+      - headlamp_host | default('') | length > 0
+      - mailu_host | default('') | length > 0
+      - mailu_mx_host | default('') | length > 0
+      - policy_reporter_host | default('') | length > 0
+      - prometheus_host | default('') | length > 0
+      - grafana_host | default('') | length > 0
+      - alertmanager_host | default('') | length > 0
+      - rook_host | default('') | length > 0
+      - argocd_host | default('') | length > 0
+      - argo_rollouts_host | default('') | length > 0
+      - vault_host | default('') | length > 0
+      - chaos_mesh_host | default('') | length > 0
+      - opencost_host | default('') | length > 0
+      - blackbox_host | default('') | length > 0
+      - keycloak_host | default('') | length > 0
+      - oauth2_host | default('') | length > 0
+      - elasticsearch_host | default('') | length > 0
+      - kibana_host | default('') | length > 0
+      - oauth2_callback_url | default('') | length > 0
+      - oauth2_signout_url | default('') | length > 0
+    fail_msg: "All *_host and oauth2 URL variables must be set in group_vars/all/atlas-k8s-addons.yml (560_apply_ingress)"

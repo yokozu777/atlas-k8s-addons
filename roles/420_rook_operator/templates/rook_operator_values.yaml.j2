@@ -1,0 +1,278 @@
+containerSecurityContext:
+  runAsNonRoot: true
+#logLevel: DEBUG
+hostpathRequiresPrivileged: false
+
+crds:
+  enabled: true
+
+monitoring:
+  # -- Enable monitoring. Requires Prometheus to be pre-installed.
+  # Enabling will also create RBAC rules to allow Operator to create ServiceMonitors
+  enabled: true
+  rulesNamespaceOverride: {{ monitoring_namespace }}
+  createPrometheusRules: true
+
+# -- Pod resource requests & limits
+resources:
+  limits:
+    cpu: 0
+    memory: 0
+  requests:
+    cpu: 0
+    memory: 0
+csi:
+  enableMetadata: true
+  csiAddons:
+    # -- Enable CSIAddons
+    enabled: false
+  enableRbdDriver: true
+  # -- Enable Ceph CSI CephFS driver
+  enableCephfsDriver: true
+  # -- Enable host networking for CSI CephFS and RBD nodeplugins. This may be necessary
+  # in some network configurations where the SDN does not provide access to an external cluster or
+  # there is significant drop in read/write performance
+  enableCSIHostNetwork: false
+  # -- Enable Snapshotter in CephFS provisioner pod
+  enableCephfsSnapshotter: true
+  # -- Enable Snapshotter in NFS provisioner pod
+  enableNFSSnapshotter: true
+  # -- Enable Snapshotter in RBD provisioner pod
+  enableRBDSnapshotter: true
+  # -- Enable Host mount for `/etc/selinux` directory for Ceph CSI nodeplugins
+  enablePluginSelinuxHostMount: false
+  # -- Enable Ceph CSI PVC encryption support
+  enableCSIEncryption: false
+
+  # -- Enable volume group snapshot feature. This feature is
+  # enabled by default as long as the necessary CRDs are available in the cluster.
+  enableVolumeGroupSnapshot: true
+  # -- Cluster name identifier to set as metadata on the CephFS subvolume and RBD images. This will be useful
+  # in cases like for example, when two container orchestrator clusters (Kubernetes/OCP) are using a single ceph cluster
+  #clusterName: rook-cluster
+
+  # -- Set logging level for cephCSI containers maintained by the cephCSI.
+  # Supported values from 0 to 5. 0 for general useful logs, 5 for trace level verbosity.
+  logLevel: 0
+
+  # -- Set logging level for Kubernetes-csi sidecar containers.
+  # Supported values from 0 to 5. 0 for general useful logs (the default), 5 for trace level verbosity.
+  # @default -- `0`
+  sidecarLogLevel: 0
+
+
+########################################
+
+  # csiRBDProvisionerResource: |
+  #   - name : csi-provisioner
+  #     resource:
+  #       requests:
+  #         memory: 0
+  #         cpu: 0
+  #       limits:
+  #         memory: 0
+  #         cpu: 0
+  #   - name : csi-resizer
+  #     resource:
+  #       requests:
+  #         memory: 0
+  #         cpu: 0
+  #       limits:
+  #         memory: 0
+  #         cpu: 0
+  #   - name : csi-attacher
+  #     resource:
+  #       requests:
+  #         memory: 0
+  #         cpu: 0
+  #       limits:
+  #         memory: 0
+  #         cpu: 0
+  #   - name : csi-snapshotter
+  #     resource:
+  #       requests:
+  #         memory: 0
+  #         cpu: 0
+  #       limits:
+  #         memory: 0
+  #         cpu: 0
+  #   - name : csi-rbdplugin
+  #     resource:
+  #       requests:
+  #         memory: 0
+  #         cpu: 0
+  #       limits:
+  #         memory: 0
+  #         cpu: 0
+  #   - name : csi-omap-generator
+  #     resource:
+  #       requests:
+  #         memory: 0
+  #         cpu: 0
+  #       limits:
+  #         memory: 0
+  #         cpu: 0
+  #   - name : liveness-prometheus
+  #     resource:
+  #       requests:
+  #         memory: 0
+  #         cpu: 0
+  #       limits:
+  #         memory: 0
+  #         cpu: 0
+
+  # # -- CEPH CSI RBD plugin resource requirement list
+  # # @default -- see values.yaml
+  # csiRBDPluginResource: |
+  #   - name : driver-registrar
+  #     resource:
+  #       requests:
+  #         memory: 0
+  #         cpu: 0
+  #       limits:
+  #         memory: 0
+  #         cpu: 0
+  #   - name : csi-rbdplugin
+  #     resource:
+  #       requests:
+  #         memory: 0
+  #         cpu: 0
+  #       limits:
+  #         memory: 0
+  #         cpu: 0
+  #   - name : liveness-prometheus
+  #     resource:
+  #       requests:
+  #         memory: 0
+  #         cpu: 0
+  #       limits:
+  #         memory: 0
+  #         cpu: 0
+
+  # # -- CEPH CSI CephFS provisioner resource requirement list
+  # # @default -- see values.yaml
+  # csiCephFSProvisionerResource: |
+  #   - name : csi-provisioner
+  #     resource:
+  #       requests:
+  #         memory: 0
+  #         cpu: 0
+  #       limits:
+  #         memory: 0
+  #         cpu: 0
+  #   - name : csi-resizer
+  #     resource:
+  #       requests:
+  #         memory: 0
+  #         cpu: 0
+  #       limits:
+  #         memory: 0
+  #         cpu: 0
+  #   - name : csi-attacher
+  #     resource:
+  #       requests:
+  #         memory: 0
+  #         cpu: 0
+  #       limits:
+  #         memory: 0
+  #         cpu: 0
+  #   - name : csi-snapshotter
+  #     resource:
+  #       requests:
+  #         memory: 0
+  #         cpu: 0
+  #       limits:
+  #         memory: 0
+  #         cpu: 0
+  #   - name : csi-cephfsplugin
+  #     resource:
+  #       requests:
+  #         memory: 0
+  #         cpu: 0
+  #       limits:
+  #         memory: 0
+  #         cpu: 0
+  #   - name : liveness-prometheus
+  #     resource:
+  #       requests:
+  #         memory: 0
+  #         cpu: 0
+  #       limits:
+  #         memory: 0
+  #         cpu: 0
+
+  # # -- CEPH CSI CephFS plugin resource requirement list
+  # # @default -- see values.yaml
+  # csiCephFSPluginResource: |
+  #   - name : driver-registrar
+  #     resource:
+  #       requests:
+  #         memory: 0
+  #         cpu: 0
+  #       limits:
+  #         memory: 0
+  #         cpu: 0
+  #   - name : csi-cephfsplugin
+  #     resource:
+  #       requests:
+  #         memory: 0
+  #         cpu: 0
+  #       limits:
+  #         memory: 0
+  #         cpu: 0
+  #   - name : liveness-prometheus
+  #     resource:
+  #       requests:
+  #         memory: 0
+  #         cpu: 0
+  #       limits:
+  #         memory: 0
+  #         cpu: 0
+
+  # # -- CEPH CSI NFS provisioner resource requirement list
+  # # @default -- see values.yaml
+  # csiNFSProvisionerResource: |
+  #   - name : csi-provisioner
+  #     resource:
+  #       requests:
+  #         memory: 0
+  #         cpu: 0
+  #       limits:
+  #         memory: 0
+  #         cpu: 0
+  #   - name : csi-nfsplugin
+  #     resource:
+  #       requests:
+  #         memory: 0
+  #         cpu: 0
+  #       limits:
+  #         memory: 0
+  #         cpu: 0
+  #   - name : csi-attacher
+  #     resource:
+  #       requests:
+  #         memory: 0
+  #         cpu: 0
+  #       limits:
+  #         memory: 0
+  #         cpu: 0
+
+  # # -- CEPH CSI NFS plugin resource requirement list
+  # # @default -- see values.yaml
+  # csiNFSPluginResource: |
+  #   - name : driver-registrar
+  #     resource:
+  #       requests:
+  #         memory: 0
+  #         cpu: 0
+  #       limits:
+  #         memory: 0
+  #         cpu: 0
+  #   - name : csi-nfsplugin
+  #     resource:
+  #       requests:
+  #         memory: 0
+  #         cpu: 0
+  #       limits:
+  #         memory: 0
+  #         cpu: 0    

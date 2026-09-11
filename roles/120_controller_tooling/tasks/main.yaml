@@ -1,0 +1,226 @@
+---
+- name: Probe controller Python virtual environment
+  ansible.builtin.stat:
+    path: "{{ controller_python_venv }}/bin/pip"
+  register: controller_venv_probe
+
+- name: Remove incomplete controller virtual environment
+  ansible.builtin.file:
+    path: "{{ controller_python_venv }}"
+    state: absent
+  when: not (controller_venv_probe.stat.exists | default(false) | bool)
+
+- name: Detect controller OS family from release files
+  ansible.builtin.include_tasks: detect_controller_os.yaml
+
+- name: Probe OS virtualenv binary
+  ansible.builtin.command:
+    argv:
+      - virtualenv
+      - --help
+  register: controller_virtualenv_bin
+  changed_when: false
+  failed_when: false
+
+- name: Probe Python venv module
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - import venv
+  register: controller_python_venv_mod
+  changed_when: false
+  failed_when: false
+
+- name: Note whether controller OS can create a virtualenv
+  ansible.builtin.set_fact:
+    controller_os_venv_capable: >-
+      {{
+        (controller_virtualenv_bin.rc | default(1) | int == 0)
+        or (controller_python_venv_mod.rc | default(1) | int == 0)
+      }}
+
+- name: Resolve controller uid
+  ansible.builtin.command:
+    argv:
+      - id
+      - -u
+  register: controller_uid_cmd
+  changed_when: false
+
+- name: Note controller uid
+  ansible.builtin.set_fact:
+    controller_uid: "{{ controller_uid_cmd.stdout | trim }}"
+
+- name: Fail when controller OS family is unsupported for tooling install
+  ansible.builtin.fail:
+    msg: >-
+      Cannot install controller tooling packages: unsupported OS family
+      '{{ controller_os_family }}' on {{ inventory_hostname }}.
+      Supported families: alpine, oracle, ubuntu, debian.
+  when:
+    - not (controller_os_venv_capable | default(false) | bool)
+    - controller_os_family == 'unknown'
+
+- name: Fail when OS cannot create a virtualenv and controller is not root
+  ansible.builtin.fail:
+    msg: >-
+      Controller OS is missing virtualenv / python3 venv and cannot install
+      packages as non-root (uid={{ controller_uid }}). Use an executor image
+      that already provides them, or run as root on a mutable controller.
+  when:
+    - not (controller_os_venv_capable | default(false) | bool)
+    - controller_uid | int != 0
+
+- name: Install controller tooling packages on Alpine
+  ansible.builtin.apk:
+    name:
+      - ca-certificates
+      - py3-pip
+      - py3-virtualenv
+      - py3-jmespath
+    state: present
+    update_cache: false
+  become: true
+  when:
+    - not (controller_os_venv_capable | default(false) | bool)
+    - controller_uid | int == 0
+    - controller_os_family == 'alpine'
+
+- name: Install controller tooling packages on Oracle Linux
+  ansible.builtin.dnf:
+    name:
+      - python3-pip
+      - python3-jmespath
+      - python3-virtualenv
+      - unzip
+      - tar
+      - jq
+      - git
+    state: present
+    update_cache: false
+    install_weak_deps: false
+  become: true
+  when:
+    - not (controller_os_venv_capable | default(false) | bool)
+    - controller_uid | int == 0
+    - controller_os_family == 'oracle'
+
+- name: Install controller tooling packages on Ubuntu
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - python3-pip
+      - python3-jmespath
+      - python3-venv
+      - unzip
+      - tar
+      - jq
+      - git
+    state: present
+    update_cache: false
+    install_recommends: false
+  become: true
+  when:
+    - not (controller_os_venv_capable | default(false) | bool)
+    - controller_uid | int == 0
+    - controller_os_family == 'ubuntu'
+
+- name: Install controller tooling packages on Debian
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - python3-pip
+      - python3-jmespath
+      - python3-venv
+      - unzip
+      - tar
+      - jq
+      - git
+    state: present
+    update_cache: false
+    install_recommends: false
+  become: true
+  when:
+    - not (controller_os_venv_capable | default(false) | bool)
+    - controller_uid | int == 0
+    - controller_os_family == 'debian'
+
+- name: Re-probe OS virtualenv binary after package install
+  ansible.builtin.command:
+    argv:
+      - virtualenv
+      - --help
+  register: controller_virtualenv_bin
+  changed_when: false
+  failed_when: false
+
+- name: Re-probe Python venv module after package install
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - import venv
+  register: controller_python_venv_mod
+  changed_when: false
+  failed_when: false
+
+- name: Note whether controller OS can create a virtualenv after package install
+  ansible.builtin.set_fact:
+    controller_os_venv_capable: >-
+      {{
+        (controller_virtualenv_bin.rc | default(1) | int == 0)
+        or (controller_python_venv_mod.rc | default(1) | int == 0)
+      }}
+
+- name: Fail when OS still cannot create a virtualenv after package install
+  ansible.builtin.fail:
+    msg: >-
+      Controller OS is missing virtualenv / python3 venv after package install
+      (uid={{ controller_uid }}, os_family={{ controller_os_family }}).
+      Install python3-virtualenv or python3-venv on the controller image.
+  when: not (controller_os_venv_capable | default(false) | bool)
+
+- name: Configure internal PKI trust on controller
+  ansible.builtin.include_tasks: install_controller_ca.yaml
+  when: pki_ca_url | default('') | length > 0
+
+- name: Ensure controller workspace directory exists
+  ansible.builtin.file:
+    path: "{{ controller_workspace }}"
+    state: directory
+    mode: '0700'
+
+- name: Ensure controller manifests directory exists
+  ansible.builtin.file:
+    path: "{{ controller_manifests_dir }}"
+    state: directory
+    mode: '0700'
+
+- name: Ensure controller reports directory exists
+  ansible.builtin.file:
+    path: "{{ controller_reports_dir }}"
+    state: directory
+    mode: '0700'
+
+- name: Create controller Python virtual environment with virtualenv
+  ansible.builtin.command:
+    cmd: virtualenv {{ controller_python_venv }}
+    creates: "{{ controller_python_venv }}/bin/pip"
+  when: controller_virtualenv_bin.rc | default(1) | int == 0
+
+- name: Create controller Python virtual environment with python3 venv
+  ansible.builtin.command:
+    cmd: python3 -m venv {{ controller_python_venv }}
+    creates: "{{ controller_python_venv }}/bin/pip"
+  when:
+    - controller_virtualenv_bin.rc | default(1) | int != 0
+    - controller_python_venv_mod.rc | default(1) | int == 0
+
+- name: Install Python packages into controller virtual environment
+  ansible.builtin.pip:
+    name:
+      - kubernetes
+      - pyOpenSSL
+      - jmespath
+    virtualenv: "{{ controller_python_venv }}"

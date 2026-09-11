@@ -1,0 +1,21 @@
+# Defaults; Ansible renders roles/942_pinniped/templates/values.yaml.j2 over this.
+pinnipedVersion: v0.47.0
+pinnipedNamespace: pinniped
+pinnipedHost: pinniped.k8s.example.com
+federationIssuer: https://pinniped.k8s.example.com
+keycloakIssuer: https://keycloak.k8s.example.com/auth/realms/atlas
+httpsSecretName: pinniped-supervisor-https
+httpsServiceName: pinniped-supervisor
+oidcClientSecretName: pinniped-supervisor-oidc-client
+oidcClientId: pinniped-supervisor
+oidcClientSecret: ""
+idpName: keycloak
+jwtAuthenticatorName: supervisor
+clusterIssuer: k8s.example.com
+caBundleB64: ""
+loginUi:
+  serviceName: pinniped-login
+  kubeconfigSecret: pinniped-login-kubeconfig
+  image: nginx:1.27-alpine
+  clusterDomain: k8s.example.com
+

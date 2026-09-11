@@ -1,0 +1,66 @@
+{% set vault_replicas = vault_ha_replicas | default(3) | int %}
+server:
+{% if vault_replicas > 1 %}
+  ha:
+    enabled: true
+    replicas: {{ vault_replicas }}
+    config: |
+      ui = true
+
+      listener "tcp" {
+        tls_disable = 1
+        address = "[::]:8200"
+        cluster_address = "[::]:8201"
+        telemetry {
+          unauthenticated_metrics_access = true
+        }
+      }
+
+      telemetry {
+        prometheus_retention_time = "30s"
+        disable_hostname = true
+      }
+
+      storage "consul" {
+        path = "{{ vault_namespace }}"
+        address = "consul-server.{{ vault_namespace }}.svc.{{ k8s_dns_domain }}:8500"
+      }
+
+      service_registration "kubernetes" {}
+{% else %}
+  standalone:
+    enabled: true
+    config: |
+      ui = true
+
+      listener "tcp" {
+        tls_disable = 1
+        address = "[::]:8200"
+        cluster_address = "[::]:8201"
+        telemetry {
+          unauthenticated_metrics_access = true
+        }
+      }
+
+      telemetry {
+        prometheus_retention_time = "30s"
+        disable_hostname = true
+      }
+
+      storage "consul" {
+        path = "{{ vault_namespace }}"
+        address = "consul-server.{{ vault_namespace }}.svc.{{ k8s_dns_domain }}:8500"
+      }
+
+      service_registration "kubernetes" {}
+{% endif %}
+  ingress:
+    enabled: false
+ui:
+  enabled: true
+
+serverTelemetry:
+  serviceMonitor:
+    enabled: true
+    selectors:
+      release: prometheus

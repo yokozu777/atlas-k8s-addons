@@ -1,0 +1,44 @@
+cr:
+  create: true
+  name: kiali
+  namespace: "{{ istio_namespace }}"
+
+  annotations: {}
+
+  spec:
+    auth:
+      strategy: "anonymous"
+    deployment:
+      ingress:
+        enabled: false
+    external_services:
+      prometheus:
+        url: "http://prometheus-kube-prometheus-prometheus.{{ monitoring_namespace }}.svc.{{ k8s_dns_domain }}:9090"
+      grafana:
+        auth:
+          insecure_skip_verify: true
+          password: "{{ k8s_secrets.grafana_admin_password }}"
+          username: "{{ k8s_users.grafana }}"
+        enabled: true
+        in_cluster_url: "http://prometheus-grafana.{{ monitoring_namespace }}.svc.{{ k8s_dns_domain }}:80"
+        url: "https://{{ grafana_host }}"
+        datasource_uid: prometheus
+        dashboards:
+        - name: "Istio Service Dashboard"
+          variables:
+            datasource: "var-datasource"
+            namespace: "var-namespace"
+            service: "var-service"
+        - name: "Istio Workload Dashboard"
+          variables:
+            datasource: "var-datasource"
+            namespace: "var-namespace"
+            workload: "var-workload"
+        - name: "Istio Mesh Dashboard"
+        - name: "Istio Control Plane Dashboard"
+      tracing:
+        auth:
+          insecure_skip_verify: true
+        enabled: true
+        use_grpc: true
+        in_cluster_url: "http://jaeger.{{ tracing_namespace }}.svc.{{ k8s_dns_domain }}:16685"

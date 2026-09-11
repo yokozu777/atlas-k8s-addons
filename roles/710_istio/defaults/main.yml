@@ -1,0 +1,4 @@
+---
+# Operator catalog: group_vars/all/atlas-k8s-addons.yml (deep knobs in role tasks/templates).
+istio_image_hub: docker.io/istio
+istio_tracing_sampling_percentage: 100

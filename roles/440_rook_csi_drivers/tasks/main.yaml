@@ -1,0 +1,29 @@
+    - name: Remove rook-csi-drivers Helm chart (absent)
+      when: rook_csi_drivers_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: ceph-csi-operator
+            namespace: "{{ rook_operator_namespace }}"
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/rookceph-csi-drivers.yaml"
+    - name: Install/configure rook_csi_drivers chart
+      when: rook_csi_drivers_chart_state | default('present') == 'present'
+      block:
+        - name: Render rook ceph-csi drivers values
+          ansible.builtin.template:
+            src: rookceph-csi-drivers.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/rookceph-csi-drivers.yaml"
+            mode: '0644'
+    
+        - name: Helming {{ rook_operator_namespace }}-csi-drivers
+          ansible.builtin.command: >-
+            helm upgrade --install {{ item }}
+            --create-namespace
+            {{ rook_csi_drivers_chart_version | helm_chart_version_args }}
+          loop:
+            - ceph-csi-operator ceph-csi-operator/ceph-csi-drivers --namespace {{ rook_operator_namespace }} -f {{ k8s_manifests_dir }}/rookceph-csi-drivers.yaml
+
+        - name: Patch Rook CSI controller RBAC for VolumeAttributesClass
+          when: rook_csi_volumeattributesclass_rbac | default(true) | bool
+          ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/rook_csi_volumeattributesclass_rbac.yaml"

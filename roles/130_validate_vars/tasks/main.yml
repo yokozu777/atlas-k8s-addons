@@ -1,0 +1,36 @@
+---
+# Addons-only validation (Helm charts, ingress, observability, platform services).
+- name: Validate Helm repository client mode
+  ansible.builtin.include_tasks: infra_helm_repo.yml
+- name: Validate controller PKI for internal Helm repos
+  ansible.builtin.include_tasks: controller_pki.yml
+- name: Validate snapshotter delivery mode
+  ansible.builtin.include_tasks: snapshotter.yml
+- name: Validate Helm repository catalog
+  ansible.builtin.include_tasks: helm_repos_catalog.yml
+- name: Validate Calico namespaces
+  ansible.builtin.include_tasks: namespaces_calico.yml
+- name: Validate Calico cluster network
+  ansible.builtin.include_tasks: calico_cluster_network.yml
+- name: Validate inventory groups for addons
+  ansible.builtin.include_tasks: inventory_masters.yml
+- name: Validate addons cluster variables
+  ansible.builtin.include_tasks: vars_cluster_addons.yml
+- name: Validate chart_state enum
+  ansible.builtin.include_tasks: chart_state.yml
+- name: Validate Grafana dashboard sources
+  ansible.builtin.include_tasks: grafana_dashboards.yml
+- name: Validate debug tooling binary source
+  ansible.builtin.include_tasks: debug_tooling.yml
+- name: Validate ingress host variables
+  ansible.builtin.include_tasks: ingress_hosts.yml
+- name: Validate addons namespaces
+  ansible.builtin.include_tasks: namespaces_addons.yml
+- name: Validate platform secrets
+  ansible.builtin.include_tasks: secrets.yml
+- name: Validate controller workspace (addons)
+  ansible.builtin.include_tasks: workspace_controller_addons.yml
+- name: Validate cluster workspace layout (addons)
+  ansible.builtin.include_tasks: workspace_layout_addons.yml
+- name: Validate cluster credentials export
+  ansible.builtin.include_tasks: cluster_credentials.yml

@@ -1,0 +1,35 @@
+    - name: Remove {{ sentry_namespace }} Helm chart (absent)
+      when: sentry_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: sentry
+            namespace: "{{ sentry_namespace }}"
+        helm_chart_absent_delete_namespace: true
+        helm_chart_absent_namespaces:
+          - "{{ sentry_namespace }}"
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/sentry.yaml"
+          - "{{ k8s_manifests_dir }}/sentry-helm.log"
+
+    - name: Install/configure {{ sentry_namespace }} chart
+      when: sentry_chart_state | default('present') == 'present'
+      block:
+        - name: Render {{ sentry_namespace }} helm values
+          ansible.builtin.template:
+            src: sentry.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/sentry.yaml"
+            mode: '0644'
+
+        - name: Start sentry helm upgrade in background
+          ansible.builtin.shell: >-
+            nohup helm upgrade --install sentry sentry/sentry
+            --namespace {{ sentry_namespace }}
+            -f {{ k8s_manifests_dir }}/sentry.yaml
+            --create-namespace
+            {{ sentry_chart_version | helm_chart_version_args }}
+            --wait --timeout=220m
+            </dev/null >> {{ k8s_manifests_dir }}/sentry-helm.log 2>&1 &
+          args:
+            executable: /bin/bash
+          changed_when: true

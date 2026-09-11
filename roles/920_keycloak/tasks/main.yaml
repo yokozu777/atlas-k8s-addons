@@ -1,0 +1,128 @@
+    - name: Remove Keycloak CNPG Cluster before chart uninstall
+      when: keycloak_chart_state | default('present') == 'absent'
+      ansible.builtin.command: >-
+        kubectl delete cluster.postgresql.cnpg.io {{ keycloak_cnpg_cluster_name }}
+        -n {{ keycloak_namespace }}
+        --ignore-not-found --wait=true --timeout=600s
+      register: keycloak_cnpg_cluster_delete
+      changed_when: false
+      failed_when: >-
+        keycloak_cnpg_cluster_delete.rc != 0
+        and 'NotFound' not in (keycloak_cnpg_cluster_delete.stderr | default(''))
+        and 'not found' not in (keycloak_cnpg_cluster_delete.stderr | default('') | lower)
+        and "doesn't have a resource type" not in (keycloak_cnpg_cluster_delete.stderr | default(''))
+
+    - name: Wait for Keycloak CNPG PVCs to be gone
+      when: keycloak_chart_state | default('present') == 'absent'
+      ansible.builtin.command: >-
+        kubectl wait --for=delete pvc
+        -l cnpg.io/cluster={{ keycloak_cnpg_cluster_name }}
+        -n {{ keycloak_namespace }} --timeout=600s
+      register: keycloak_cnpg_pvc_wait
+      changed_when: false
+      failed_when: >-
+        keycloak_cnpg_pvc_wait.rc != 0
+        and 'NotFound' not in (keycloak_cnpg_pvc_wait.stderr | default(''))
+        and 'not found' not in (keycloak_cnpg_pvc_wait.stderr | default('') | lower)
+        and 'no matching resources' not in (keycloak_cnpg_pvc_wait.stderr | default('') | lower)
+        and "doesn't have a resource type" not in (keycloak_cnpg_pvc_wait.stderr | default(''))
+
+    - name: Remove keycloak Helm chart (absent)
+      when: keycloak_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: keycloak
+            namespace: "{{ keycloak_namespace }}"
+        helm_chart_absent_delete_namespace: true
+        helm_chart_absent_namespaces:
+          - "{{ keycloak_namespace }}"
+        helm_chart_absent_ingress_app_names:
+          - keycloak-http
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/keycloak.yaml"
+          - "{{ k8s_manifests_dir }}/cnpg-keycloak-cluster.yaml"
+    - name: Install/configure keycloak chart
+      when: keycloak_chart_state | default('present') == 'present'
+      block:
+        - name: Ensure Keycloak namespace exists
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: "{{ keycloak_namespace }}"
+
+        - name: Wait for CloudNativePG Cluster CRD
+          ansible.builtin.command: >-
+            kubectl wait --for=condition=established
+            crd/clusters.postgresql.cnpg.io --timeout=120s
+          changed_when: false
+
+        - name: Render Keycloak CNPG Cluster manifest
+          ansible.builtin.template:
+            src: cnpg-keycloak-cluster.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/cnpg-keycloak-cluster.yaml"
+            mode: '0644'
+
+        - name: Apply Keycloak CNPG Cluster
+          ansible.builtin.command: >-
+            kubectl --validate=false apply -f {{ k8s_manifests_dir }}/cnpg-keycloak-cluster.yaml
+          register: keycloak_cnpg_cluster_apply
+          until: keycloak_cnpg_cluster_apply.rc == 0
+          retries: 10
+          delay: 6
+          changed_when: "'configured' in keycloak_cnpg_cluster_apply.stdout or 'created' in keycloak_cnpg_cluster_apply.stdout"
+
+        - name: Wait for Keycloak CNPG Cluster Ready
+          ansible.builtin.command: >-
+            kubectl wait --for=condition=Ready
+            cluster.postgresql.cnpg.io/{{ keycloak_cnpg_cluster_name }}
+            -n {{ keycloak_namespace }} --timeout=600s
+          changed_when: false
+
+        - name: Wait for Keycloak CNPG application secret
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Secret
+            name: "{{ keycloak_cnpg_cluster_name }}-app"
+            namespace: "{{ keycloak_namespace }}"
+          register: keycloak_cnpg_app_secret
+          until: keycloak_cnpg_app_secret.resources | default([]) | length > 0
+          retries: 30
+          delay: 5
+
+        - name: Render keycloak helm values
+          ansible.builtin.template:
+            src: keycloak.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/keycloak.yaml"
+            mode: '0644'
+
+        - name: Helming keycloak
+          ansible.builtin.command: >-
+            helm upgrade --install keycloak codecentric/keycloakx
+            --namespace {{ keycloak_namespace }}
+            --create-namespace
+            -f {{ k8s_manifests_dir }}/keycloak.yaml
+            {{ keycloak_chart_version | helm_chart_version_args }}
+          register: keycloak_helm
+          changed_when: >-
+            'has been upgraded' in keycloak_helm.stdout
+            or 'has been installed' in keycloak_helm.stdout
+
+        - name: Wait for Keycloak StatefulSet
+          ansible.builtin.command: >-
+            kubectl rollout status statefulset/keycloak
+            -n {{ keycloak_namespace }} --timeout=600s
+          register: wait_keycloak
+          until: wait_keycloak.rc == 0
+          retries: 10
+          delay: 15
+          changed_when: false
+
+        - name: Remove Keycloak app ServiceMonitor (metrics via additionalScrapeConfigs)
+          ansible.builtin.command: >-
+            kubectl delete servicemonitor keycloak
+            -n {{ keycloak_namespace }} --ignore-not-found
+          changed_when: false

@@ -1,0 +1,39 @@
+---
+- name: Remove thanos Helm chart (absent)
+  when: thanos_chart_state | default('present') == 'absent'
+  ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+  vars:
+    helm_chart_absent_releases:
+      - name: thanos
+        namespace: "{{ monitoring_namespace }}"
+    helm_chart_absent_extra_resources:
+      - api_version: objectbucket.io/v1alpha1
+        kind: ObjectBucketClaim
+        name: "{{ thanos_obc_name }}"
+        namespace: "{{ monitoring_namespace }}"
+      - api_version: v1
+        kind: Secret
+        name: "{{ thanos_objstore_secret }}"
+        namespace: "{{ monitoring_namespace }}"
+    helm_chart_absent_local_files:
+      - "{{ k8s_manifests_dir }}/thanos.yaml"
+
+- name: Install/configure thanos chart
+  when: thanos_chart_state | default('present') == 'present'
+  block:
+    - name: Prepare Thanos object store
+      ansible.builtin.include_tasks: objstore.yml
+
+    - name: Render thanos helm values
+      ansible.builtin.template:
+        src: thanos.yaml.j2
+        dest: "{{ k8s_manifests_dir }}/thanos.yaml"
+        mode: "0644"
+
+    - name: Helming thanos
+      ansible.builtin.command: >-
+        helm upgrade --install {{ item }}
+        --create-namespace
+        {{ thanos_chart_version | helm_chart_version_args }}
+      loop:
+        - thanos thanos-community/thanos --namespace {{ monitoring_namespace }} -f {{ k8s_manifests_dir }}/thanos.yaml

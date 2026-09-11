@@ -1,0 +1,7 @@
+---
+# Ansible Galaxy collections used by roles in this repo.
+# Install before ./run.sh:
+#   ansible-galaxy collection install -r requirements.yml
+collections:
+  - name: kubernetes.core
+    version: ">=6.4.0"

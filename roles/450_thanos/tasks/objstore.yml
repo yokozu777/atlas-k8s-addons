@@ -1,0 +1,89 @@
+---
+- name: Require Rook cluster when Thanos is present
+  ansible.builtin.assert:
+    that:
+      - rook_cluster_chart_state | default('present') == 'present'
+    fail_msg: >-
+      thanos requires rook_cluster_chart_state=present
+      (StorageClass {{ thanos_storage_class }} / Rook RGW)
+
+- name: Wait for Rook bucket StorageClass
+  kubernetes.core.k8s_info:
+    api_version: storage.k8s.io/v1
+    kind: StorageClass
+    name: "{{ thanos_storage_class }}"
+  register: thanos_obc_sc
+  retries: 60
+  delay: 10
+  until: thanos_obc_sc.resources | default([]) | length > 0
+
+- name: Apply ObjectBucketClaim for Thanos blocks
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: objectbucket.io/v1alpha1
+      kind: ObjectBucketClaim
+      metadata:
+        name: "{{ thanos_obc_name }}"
+        namespace: "{{ monitoring_namespace }}"
+      spec:
+        generateBucketName: "{{ thanos_obc_name }}"
+        storageClassName: "{{ thanos_storage_class }}"
+
+- name: Wait for ObjectBucketClaim Secret
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ thanos_obc_name }}"
+    namespace: "{{ monitoring_namespace }}"
+  register: thanos_obc_secret
+  retries: 180
+  delay: 10
+  until: thanos_obc_secret.resources | default([]) | length > 0
+  no_log: true
+
+- name: Wait for ObjectBucketClaim ConfigMap
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    name: "{{ thanos_obc_name }}"
+    namespace: "{{ monitoring_namespace }}"
+  register: thanos_obc_cm
+  retries: 180
+  delay: 10
+  until: thanos_obc_cm.resources | default([]) | length > 0
+
+- name: Require ObjectBucketClaim bucket coordinates
+  ansible.builtin.assert:
+    that:
+      - thanos_obc_cm.resources[0].data.BUCKET_NAME | default('') | length > 0
+      - thanos_obc_cm.resources[0].data.BUCKET_HOST | default('') | length > 0
+      - thanos_obc_secret.resources[0].data.AWS_ACCESS_KEY_ID | default('') | length > 0
+      - thanos_obc_secret.resources[0].data.AWS_SECRET_ACCESS_KEY | default('') | length > 0
+    fail_msg: ObjectBucketClaim ConfigMap/Secret missing BUCKET_* or AWS_* keys
+  no_log: true
+
+- name: Build Thanos objstore Secret from Rook OBC
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "{{ thanos_objstore_secret }}"
+        namespace: "{{ monitoring_namespace }}"
+      type: Opaque
+      stringData:
+        objstore.yml: |
+          type: S3
+          config:
+            bucket: "{{ thanos_obc_cm.resources[0].data.BUCKET_NAME }}"
+            endpoint: "{{ thanos_obc_cm.resources[0].data.BUCKET_HOST }}:{{ thanos_s3_endpoint_port }}"
+            access_key: "{{ thanos_obc_secret.resources[0].data.AWS_ACCESS_KEY_ID | b64decode }}"
+            secret_key: "{{ thanos_obc_secret.resources[0].data.AWS_SECRET_ACCESS_KEY | b64decode }}"
+            insecure: {{ thanos_s3_insecure | bool | to_json }}
+            region: "{{ thanos_obc_cm.resources[0].data.BUCKET_REGION | default(thanos_s3_region, true) }}"
+            bucket_lookup_type: path
+            http_config:
+              insecure_skip_verify: {{ thanos_s3_tls_insecure_skip_verify | bool | to_json }}
+  no_log: true

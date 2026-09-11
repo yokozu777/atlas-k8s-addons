@@ -1,0 +1,29 @@
+---
+- name: Assert controller workspace paths are defined for addons
+  ansible.builtin.assert:
+    that:
+      - controller_workspace | default('') | length > 0
+      - controller_manifests_dir | default('') | length > 0
+      - controller_reports_dir | default('') | length > 0
+      - controller_kubeconfig | default('') | length > 0
+      - controller_python_venv | default('') | length > 0
+      - controller_bin_dir | default('') | length > 0
+      - controller_helm_config_dir | default('') | length > 0
+      - _controller_helm_cache_dir | length > 0
+      - controller_ca_cert_path | default('') | length > 0
+      - controller_ca_cert_dir | default('') | length > 0
+      - controller_ssl_cert_file | default('') | length > 0
+      - controller_ssl_cert_file is match('^' ~ controller_ca_cert_dir)
+      - controller_staging_dir | default('') | length > 0
+      - keycloak_tf_workspace | default('') | length > 0
+      - controller_manifests_dir is match('^' ~ controller_workspace)
+      - controller_reports_dir is match('^' ~ controller_workspace)
+      - controller_kubeconfig is match('^' ~ controller_workspace)
+      - _controller_helm_cache_dir is match('^' ~ controller_workspace)
+      - keycloak_tf_workspace is match('^' ~ controller_staging_dir)
+    fail_msg: >-
+      Controller workspace variables (controller_*) are missing or inconsistent —
+      check group_vars/all/atlas-k8s-addons.yml (addons)
+  vars:
+    _controller_helm_cache_dir: >-
+      {{ controller_helm_cache_dir | default(controller_helm_config_dir ~ '/cache') }}

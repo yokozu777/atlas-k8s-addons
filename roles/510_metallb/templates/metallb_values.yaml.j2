@@ -1,0 +1,30 @@
+prometheus:
+  # scrapeAnnotations=false strips annotations from pods only.
+  # ServiceMonitor chart still sets prometheus.io/scrape on monitor Services →
+  # job kubernetes-service-endpoints in kube-prometheus scrapes without TLS skip → log noise.
+  scrapeAnnotations: false
+  namespace: "{{ monitoring_namespace }}"
+  serviceAccount: "prometheus-kube-prometheus-operator"
+  serviceMonitor:
+    enabled: true
+    speaker:
+      annotations:
+        prometheus.io/scrape: "false"
+    controller:
+      annotations:
+        prometheus.io/scrape: "false"
+
+# L2-only pool (see metallb.yml); BGP/frr-k8s not required
+frrk8s:
+  enabled: false
+
+speaker:
+  enabled: true
+  logLevel: info
+  tolerateMaster: false
+  # hostNetwork: with maxSurge>0 two speakers on one node → bind conflict on 127.0.0.1:17472
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0

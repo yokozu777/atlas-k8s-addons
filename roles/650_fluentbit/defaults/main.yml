@@ -1,0 +1,13 @@
+---
+# Operator catalog: group_vars/all/atlas-k8s-addons.yml (deep knobs in role tasks/templates).
+fluentbit_es_retry_limit: 5
+fluentbit_es_trace_error: true
+fluentbit_early_severity_gate: true
+fluentbit_kube_tail_exclude_namespaces:
+  - rook-ceph
+  - rook-ceph-cluster
+  - chaos-mesh
+fluentbit_kube_full_namespaces:
+  - falco
+  - logging
+  - kube-system

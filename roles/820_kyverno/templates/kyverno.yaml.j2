@@ -1,0 +1,21 @@
+# Engine only: ClusterPolicy / Policy are not applied by this role.
+# Webhooks stay empty until policies exist. UI is 830_policy_reporter. No kyverno-policies chart.
+crds:
+  install: true
+
+admissionController:
+  serviceMonitor:
+    enabled: true
+backgroundController:
+  serviceMonitor:
+    enabled: true
+cleanupController:
+  serviceMonitor:
+    enabled: true
+reportsController:
+  serviceMonitor:
+    enabled: true
+
+# Sidecar label grafana_dashboard=1; kube-prometheus Grafana searches all namespaces.
+grafana:
+  enabled: true

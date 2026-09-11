@@ -1,0 +1,63 @@
+---
+- name: Wait for the Kibana to be up
+  ansible.builtin.uri:
+    url: "https://{{ kibana_host }}"
+    method: GET
+    return_content: no
+    status_code: 200
+    validate_certs: no
+  register: result
+  retries: 1000
+  delay: 5
+  until: result.status == 200
+
+- name: Remove placeholder Kibana dashboards
+  ansible.builtin.uri:
+    url: "https://{{ kibana_host }}/api/saved_objects/dashboard/{{ item }}"
+    method: DELETE
+    headers:
+      kbn-xsrf: "true"
+    status_code:
+      - 200
+      - 204
+      - 404
+    url_username: "{{ k8s_users.kibana_dashboard }}"
+    url_password: "{{ k8s_secrets.kibana_elastic_password }}"
+    force_basic_auth: true
+    validate_certs: false
+  loop:
+    - k8s-dashboard
+    - hosts-dashboard
+
+- name: Find Atlas Kibana dashboard ndjson
+  ansible.builtin.find:
+    paths: "{{ role_path }}/files"
+    patterns: "atlas-*.ndjson"
+  register: atlas_kibana_ndjson
+
+- name: Import Atlas Kibana dashboards
+  ansible.builtin.uri:
+    url: "https://{{ kibana_host }}/api/saved_objects/_import?overwrite=true"
+    method: POST
+    headers:
+      kbn-xsrf: "true"
+    body_format: form-multipart
+    body:
+      file:
+        content: "{{ lookup('file', item.path) }}"
+        filename: "{{ item.path | basename }}"
+    url_username: "{{ k8s_users.kibana_dashboard }}"
+    url_password: "{{ k8s_secrets.kibana_elastic_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: 200
+  register: kibana_ndjson_import
+  failed_when: >-
+    not (kibana_ndjson_import.json.success | default(false))
+    or (kibana_ndjson_import.json.errors | default([]) | length > 0)
+  loop: "{{ atlas_kibana_ndjson.files | sort(attribute='path') }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+
+- name: Ensure Atlas Kibana log alerts
+  ansible.builtin.include_tasks: alerts.yml

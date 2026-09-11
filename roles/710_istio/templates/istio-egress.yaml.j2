@@ -1,0 +1,10 @@
+name: istio-egressgateway
+labels:
+  istio: egressgateway
+service:
+  type: ClusterIP
+  ports:
+    - name: http2
+      port: 80
+    - name: https
+      port: 443

@@ -1,0 +1,30 @@
+---
+- name: Stat existing Internal CA bundle
+  ansible.builtin.stat:
+    path: "{{ download_internal_ca_dest | default(k8s_manifests_dir ~ '/internal-ca.pem') }}"
+    checksum_algorithm: sha256
+  register: download_internal_ca_before
+
+- name: Retrieve Internal CA from PKI
+  ansible.builtin.get_url:
+    url: >-
+      {{
+        pki_ca_url
+        if pki_ca_url is string
+        else (pki_ca_url | first)
+      }}
+    dest: "{{ download_internal_ca_dest | default(k8s_manifests_dir ~ '/internal-ca.pem') }}"
+    mode: '0644'
+    force: true
+    validate_certs: false
+  changed_when: false
+
+- name: Download Internal CA bundle
+  ansible.builtin.stat:
+    path: "{{ download_internal_ca_dest | default(k8s_manifests_dir ~ '/internal-ca.pem') }}"
+    checksum_algorithm: sha256
+  register: download_internal_ca_after
+  changed_when: >-
+    not (download_internal_ca_before.stat.exists | default(false))
+    or (download_internal_ca_before.stat.checksum | default(''))
+       != (download_internal_ca_after.stat.checksum | default(''))

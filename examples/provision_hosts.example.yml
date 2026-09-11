@@ -1,0 +1,34 @@
+# Example provision inventory for role 430_rook_cluster (Rook storage nodes).
+# This is NOT the Ansible inventory — copy and point provision_hosts_file at it:
+#   provision_hosts_file: /path/to/provision-hosts.yml
+#
+# Children group for workers must match k8s_worker_hosts (default: k8s_workers).
+# Disk index provision_rook_data_disk_index (default 1) selects the OSD data disk;
+# set a real WWN from /dev/disk/by-id/ on the worker.
+
+all:
+  children:
+    k8s_workers:
+      hosts:
+        "192.168.1.230":
+          hostname: worker1.k8s.example.com
+          provision:
+            disks:
+              - size: "70"
+                slot: 0
+                storage: local
+              - size: "100"
+                slot: 1
+                storage: local
+                wwn: "0x5000c500c35cd230"
+        "192.168.1.231":
+          hostname: worker2.k8s.example.com
+          provision:
+            disks:
+              - size: "70"
+                slot: 0
+                storage: local
+              - size: "100"
+                slot: 1
+                storage: local
+                wwn: "0x5000c500c35cd231"

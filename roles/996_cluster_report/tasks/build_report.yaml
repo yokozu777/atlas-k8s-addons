@@ -1,0 +1,269 @@
+---
+- name: Initialize cluster credentials report service list
+  ansible.builtin.set_fact:
+    cluster_credentials_report_services: []
+
+- name: Build cluster credentials service entries
+  ansible.builtin.set_fact:
+    cluster_credentials_report_services: >-
+      {{
+        cluster_credentials_report_services
+        + [
+          {
+            'id': item.id,
+            'section': item.section,
+            'title': item.title,
+            'icon': item.icon | default(''),
+            'url': cluster_credentials_service_url,
+            'namespace': cluster_credentials_service_namespace,
+            'username': cluster_credentials_service_username,
+            'password': cluster_credentials_service_password,
+            'password_masked': cluster_credentials_service_password_masked,
+            'password_format': item.password_format | default('plain'),
+            'auth': item.auth | default(''),
+            'notes': cluster_credentials_service_notes,
+            'password_key': item.password_key | default(''),
+          }
+        ]
+      }}
+  vars:
+    cluster_credentials_service_url: >-
+      {{
+        lookup('vars', item.url_var)
+        if item.url_var is defined
+        else (
+          ('https://' ~ lookup('vars', item.host_var))
+          if item.host_var is defined
+          else ''
+        )
+      }}
+    cluster_credentials_service_namespace: >-
+      {{ lookup('vars', item.namespace_var) | default('', true)
+         if item.namespace_var is defined
+         else '' }}
+    cluster_credentials_service_username: >-
+      {{
+        lookup('vars', item.username_var) | default('', true)
+        if item.username_var is defined
+        else item.username | default('', true)
+      }}
+    cluster_credentials_service_password: >-
+      {{
+        k8s_secrets[item.password_key] | default('', true)
+        if item.password_key is defined
+        else ''
+      }}
+    cluster_credentials_service_password_masked: >-
+      {%- set pwd = k8s_secrets[item.password_key] | default('', true)
+          if item.password_key is defined
+          else '' -%}
+      {%- if cluster_credentials_mode == 'summary' and pwd | length > 4 -%}
+      {{- pwd[:2] ~ ('*' * (pwd | length - 4)) ~ pwd[-2:] -}}
+      {%- else -%}
+      {{- pwd -}}
+      {%- endif -%}
+    cluster_credentials_service_notes: "{{ item.notes | default('') }}"
+  loop: "{{ cluster_credentials_services }}"
+  when:
+    - item.state_var is not defined
+      or (lookup('vars', item.state_var) | default('present')) == 'present'
+  loop_control:
+    label: "{{ item.id }}"
+  no_log: true
+
+- name: Initialize cluster credentials DNS secret list
+  ansible.builtin.set_fact:
+    cluster_credentials_report_dns: []
+
+- name: Build cluster credentials DNS secret entries
+  ansible.builtin.set_fact:
+    cluster_credentials_report_dns: >-
+      {{
+        cluster_credentials_report_dns
+        + [
+          {
+            'id': item.id,
+            'title': item.title,
+            'password_key': item.password_key,
+            'value': cluster_credentials_dns_secret_value,
+            'value_masked': cluster_credentials_dns_secret_value_masked,
+          }
+        ]
+      }}
+  vars:
+    cluster_credentials_dns_secret_value: "{{ k8s_secrets[item.password_key] | default('', true) }}"
+    cluster_credentials_dns_secret_value_masked: >-
+      {%- set pwd = k8s_secrets[item.password_key] | default('', true) -%}
+      {%- if cluster_credentials_mode == 'summary' and pwd | length > 4 -%}
+      {{- pwd[:2] ~ ('*' * (pwd | length - 4)) ~ pwd[-2:] -}}
+      {%- else -%}
+      {{- pwd -}}
+      {%- endif -%}
+  loop: "{{ cluster_credentials_dns_secrets }}"
+  loop_control:
+    label: "{{ item.id }}"
+  no_log: true
+
+- name: Initialize cluster credentials OAuth secret list
+  ansible.builtin.set_fact:
+    cluster_credentials_report_oauth_secrets: []
+
+- name: Build cluster credentials OAuth secret entries
+  ansible.builtin.set_fact:
+    cluster_credentials_report_oauth_secrets: >-
+      {{
+        cluster_credentials_report_oauth_secrets
+        + [
+          {
+            'id': item.id,
+            'title': item.title,
+            'password_key': item.password_key,
+            'value': cluster_credentials_oauth_secret_value,
+            'value_masked': cluster_credentials_oauth_secret_value_masked,
+          }
+        ]
+      }}
+  vars:
+    cluster_credentials_oauth_secret_value: "{{ k8s_secrets[item.password_key] | default('', true) }}"
+    cluster_credentials_oauth_secret_value_masked: >-
+      {%- set pwd = k8s_secrets[item.password_key] | default('', true) -%}
+      {%- if cluster_credentials_mode == 'summary' and pwd | length > 4 -%}
+      {{- pwd[:2] ~ ('*' * (pwd | length - 4)) ~ pwd[-2:] -}}
+      {%- else -%}
+      {{- pwd -}}
+      {%- endif -%}
+  loop: "{{ cluster_credentials_oauth_secrets }}"
+  loop_control:
+    label: "{{ item.id }}"
+  no_log: true
+
+- name: Build cluster credentials quick access rows
+  ansible.builtin.set_fact:
+    cluster_credentials_report_quick_access: "{{ cluster_credentials_quick_access_rows }}"
+  vars:
+    cluster_credentials_quick_access_rows: >-
+      {%- set rows = [] -%}
+      {%- for svc in cluster_credentials_report_services -%}
+      {%- if svc.url | default('') | length > 0 -%}
+      {%- set _ = rows.append({
+        'id': svc.id,
+        'title': svc.title,
+        'url': svc.url,
+        'username': svc.username | default(''),
+        'password_display': (
+          svc.password_masked
+          if cluster_credentials_mode == 'summary'
+          else svc.password
+        ),
+        'password_format': svc.password_format | default('plain'),
+        'auth': svc.auth | default(''),
+      }) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ rows }}
+  no_log: true
+
+- name: Initialize cluster credentials infra report list
+  ansible.builtin.set_fact:
+    cluster_credentials_report_infra: []
+
+- name: Build cluster credentials infra section
+  ansible.builtin.import_tasks: build_infra.yaml
+  when: cluster_credentials_include_infra | bool
+
+- name: Assemble cluster credentials navigation cheat sheet
+  ansible.builtin.set_fact:
+    cluster_credentials_report_cheat_sheet: "{{ cluster_credentials_cheat_sheet_rows }}"
+  vars:
+    cluster_credentials_cheat_sheet_rows: >-
+      {%- set rows = [
+        {
+          'need': 'URL + login + password for any UI',
+          'section': 'Quick access',
+          'anchor': 'quick-access',
+        },
+        {
+          'need': 'Path to kubeconfig',
+          'section': 'Cluster access',
+          'anchor': 'cluster-access',
+          'hint': controller_kubeconfig,
+        },
+        {
+          'need': 'OIDC issuer',
+          'section': 'Platform endpoints',
+          'anchor': 'platform-endpoints',
+          'hint': oidc_issuer_url,
+        },
+        {
+          'need': 'OAuth2 callback / sign-out',
+          'section': 'Platform endpoints',
+          'anchor': 'platform-endpoints',
+          'hint': oauth2_callback_url ~ ' / ' ~ oauth2_signout_url,
+        },
+        {
+          'need': 'TSIG for external-dns',
+          'section': 'DNS (operator)',
+          'anchor': 'dns-secrets',
+        },
+        {
+          'need': 'Table of all ingress hosts',
+          'section': 'Ingress map',
+          'anchor': 'ingress-map',
+        },
+        {
+          'need': 'Live secrets from the cluster',
+          'section': 'Runtime secrets (kubectl)',
+          'anchor': 'runtime-secrets-kubectl',
+        },
+      ] -%}
+      {%- if cluster_credentials_include_infra | bool -%}
+      {%- set _ = rows.append({
+        'need': 'Infra (BIND, Proxmox, repos)',
+        'section': 'Infra endpoints',
+        'anchor': 'infra-endpoints',
+      }) -%}
+      {%- endif -%}
+      {{ rows }}
+
+- name: Assemble cluster credentials report
+  ansible.builtin.set_fact:
+    cluster_credentials_report:
+      meta:
+        generated_at: "{{ ansible_facts['date_time']['iso8601'] }}"
+        cluster_name: "{{ k8s_cluster_name }}"
+        cluster_domain: "{{ k8s_cluster_domain }}"
+        dns_suffix: "{{ k8s_dns_domain }}"
+        mode: "{{ cluster_credentials_mode }}"
+        include_infra: "{{ cluster_credentials_include_infra | bool }}"
+      access:
+        api_endpoint: "{{ control_plane_endpoint }}"
+        vip_address: "{{ vip_address }}"
+        kubeconfig: "{{ k8s_kubeconfig }}"
+        ssh_user: "{{ k8s_admin_user }}"
+        masters: "{{ groups.get(k8s_master_hosts, []) }}"
+        workers: "{{ groups.get(k8s_worker_hosts, []) }}"
+      paths:
+        controller_workspace: "{{ controller_workspace }}"
+        manifests_dir: "{{ k8s_manifests_dir }}"
+        reports_dir: "{{ controller_reports_dir }}"
+        secrets_dir: "{{ controller_secrets_dir }}"
+        kubeconfig: "{{ controller_kubeconfig }}"
+      endpoints:
+        nexus: "{{ nexus_base_url }}"
+        pki_ca: "{{ pki_ca_url }}"
+        keycloak: "{{ keycloak_url }}"
+        oidc_issuer: "{{ oidc_issuer_url }}"
+        oauth2_callback: "{{ oauth2_callback_url }}"
+        oauth2_signout: "{{ oauth2_signout_url }}"
+      quick_access: "{{ cluster_credentials_report_quick_access }}"
+      services: "{{ cluster_credentials_report_services }}"
+      dns_secrets: "{{ cluster_credentials_report_dns }}"
+      oauth_secrets: "{{ cluster_credentials_report_oauth_secrets }}"
+      ingress_apps: "{{ k8s_ingress_apps | default([]) }}"
+      users: "{{ k8s_users }}"
+      secrets: "{{ k8s_secrets }}"
+      runtime_secrets: []
+      runtime_skipped_reason: ""
+      infra: "{{ cluster_credentials_report_infra | default([]) }}"
+      cheat_sheet: "{{ cluster_credentials_report_cheat_sheet | default([]) }}"
+  no_log: true

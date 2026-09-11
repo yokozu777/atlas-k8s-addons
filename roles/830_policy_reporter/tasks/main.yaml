@@ -1,0 +1,42 @@
+    - name: Remove {{ policy_reporter_namespace }} Helm chart (absent)
+      when: policy_reporter_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: policy-reporter
+            namespace: "{{ policy_reporter_namespace }}"
+        helm_chart_absent_delete_namespace: true
+        helm_chart_absent_namespaces:
+          - "{{ policy_reporter_namespace }}"
+        helm_chart_absent_ingress_app_names:
+          - policy-reporter
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/policy-reporter.yaml"
+
+    - name: Install/configure policy-reporter chart
+      when: policy_reporter_chart_state | default('present') == 'present'
+      block:
+        - name: Render policy-reporter helm values
+          ansible.builtin.template:
+            src: policy-reporter.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/policy-reporter.yaml"
+            mode: '0644'
+
+        - name: Helming {{ policy_reporter_namespace }}
+          ansible.builtin.command: >-
+            helm upgrade --install policy-reporter policy-reporter/policy-reporter
+            --namespace {{ policy_reporter_namespace }} --create-namespace
+            -f {{ k8s_manifests_dir }}/policy-reporter.yaml
+            {{ policy_reporter_chart_version | helm_chart_version_args }}
+
+        - name: Wait for Policy Reporter UI Ready
+          ansible.builtin.command: >-
+            kubectl wait --timeout=5m
+            -n {{ policy_reporter_namespace }}
+            --for=condition=Ready
+            pod -l app.kubernetes.io/name=policy-reporter-ui
+          register: wait_policy_reporter_ui
+          until: wait_policy_reporter_ui.rc == 0
+          retries: 20
+          delay: 6
+          changed_when: false

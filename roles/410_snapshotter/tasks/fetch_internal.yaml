@@ -1,0 +1,23 @@
+---
+- name: Download external-snapshotter archive from internal static nginx
+  ansible.builtin.get_url:
+    url: "{{ snapshotter_archive_url }}"
+    dest: "/tmp/{{ snapshotter_archive_filename }}"
+    mode: "0644"
+
+- name: Ensure external snapshotter directory exists
+  ansible.builtin.file:
+    path: "{{ external_snapshotter_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Extract external-snapshotter manifests from internal archive
+  ansible.builtin.unarchive:
+    src: "/tmp/{{ snapshotter_archive_filename }}"
+    dest: "{{ external_snapshotter_dir }}"
+    remote_src: true
+
+- name: Remove downloaded external-snapshotter archive
+  ansible.builtin.file:
+    path: "/tmp/{{ snapshotter_archive_filename }}"
+    state: absent

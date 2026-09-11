@@ -1,0 +1,158 @@
+---
+- name: GET Atlas Kibana log alert {{ kibana_alert_rule.id }}
+  ansible.builtin.uri:
+    url: "https://{{ kibana_host }}/api/alerting/rule/{{ kibana_alert_rule.id }}"
+    method: GET
+    headers:
+      kbn-xsrf: "true"
+    url_username: "{{ k8s_users.kibana_dashboard }}"
+    url_password: "{{ k8s_secrets.kibana_elastic_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code:
+      - 200
+      - 404
+      - 401
+      - 403
+  register: kibana_alert_get
+  failed_when: false
+
+- name: Fail if GET Atlas Kibana log alert {{ kibana_alert_rule.id }} was rejected
+  ansible.builtin.fail:
+    msg: >-
+      GET /api/alerting/rule/{{ kibana_alert_rule.id }} HTTP
+      {{ kibana_alert_get.status | default('n/a') }}:
+      {{ kibana_alert_get.json | default(kibana_alert_get.content) | default(kibana_alert_get.msg) | default('') }}
+  when: kibana_alert_get.status | default(0) not in [200, 404]
+
+- name: Resolve Atlas Kibana log alert write mode {{ kibana_alert_rule.id }}
+  ansible.builtin.set_fact:
+    kibana_alert_create: >-
+      {{
+        (kibana_alert_get.status | default(0) == 404)
+        or (
+          (kibana_alert_get.status | default(0) == 200)
+          and ((kibana_alert_get.json.consumer | default('')) != 'stackAlerts')
+        )
+      }}
+    kibana_alert_update: >-
+      {{
+        (kibana_alert_get.status | default(0) == 200)
+        and ((kibana_alert_get.json.consumer | default('')) == 'stackAlerts')
+      }}
+
+- name: DELETE Atlas Kibana log alert {{ kibana_alert_rule.id }} when consumer is not stackAlerts
+  when:
+    - kibana_alert_get.status | default(0) == 200
+    - (kibana_alert_get.json.consumer | default('')) != 'stackAlerts'
+  ansible.builtin.uri:
+    url: "https://{{ kibana_host }}/api/alerting/rule/{{ kibana_alert_rule.id }}"
+    method: DELETE
+    headers:
+      kbn-xsrf: "true"
+    url_username: "{{ k8s_users.kibana_dashboard }}"
+    url_password: "{{ k8s_secrets.kibana_elastic_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code:
+      - 200
+      - 204
+      - 404
+      - 401
+      - 403
+  register: kibana_alert_recreate_delete
+  failed_when: false
+
+- name: Fail if DELETE Atlas Kibana log alert {{ kibana_alert_rule.id }} was rejected
+  ansible.builtin.fail:
+    msg: >-
+      DELETE /api/alerting/rule/{{ kibana_alert_rule.id }} HTTP
+      {{ kibana_alert_recreate_delete.status | default('n/a') }}:
+      {{ kibana_alert_recreate_delete.json | default(kibana_alert_recreate_delete.content) | default(kibana_alert_recreate_delete.msg) | default('') }}
+  when:
+    - kibana_alert_get.status | default(0) == 200
+    - (kibana_alert_get.json.consumer | default('')) != 'stackAlerts'
+    - kibana_alert_recreate_delete.status | default(0) not in [200, 204, 404]
+
+- name: POST Atlas Kibana log alert {{ kibana_alert_rule.id }}
+  when: kibana_alert_create | bool
+  ansible.builtin.uri:
+    url: "https://{{ kibana_host }}/api/alerting/rule/{{ kibana_alert_rule.id }}"
+    method: POST
+    headers:
+      kbn-xsrf: "true"
+      Content-Type: application/json
+    body_format: json
+    body:
+      name: "{{ kibana_alert_rule.name }}"
+      tags:
+        - atlas-logs
+      rule_type_id: ".es-query"
+      consumer: stackAlerts
+      enabled: true
+      schedule:
+        interval: "{{ kibana_alert_rule.schedule }}"
+      params: "{{ kibana_alert_rule.params }}"
+      actions: []
+    url_username: "{{ k8s_users.kibana_dashboard }}"
+    url_password: "{{ k8s_secrets.kibana_elastic_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code:
+      - 200
+      - 201
+      - 400
+      - 401
+      - 403
+      - 409
+  register: kibana_alert_post
+  failed_when: false
+
+- name: Fail if POST Atlas Kibana log alert {{ kibana_alert_rule.id }} was rejected
+  ansible.builtin.fail:
+    msg: >-
+      POST /api/alerting/rule/{{ kibana_alert_rule.id }} HTTP
+      {{ kibana_alert_post.status | default('n/a') }}:
+      {{ kibana_alert_post.json | default(kibana_alert_post.content) | default(kibana_alert_post.msg) | default('') }}
+  when:
+    - kibana_alert_create | bool
+    - kibana_alert_post.status | default(0) not in [200, 201]
+
+- name: PUT Atlas Kibana log alert {{ kibana_alert_rule.id }}
+  when: kibana_alert_update | bool
+  ansible.builtin.uri:
+    url: "https://{{ kibana_host }}/api/alerting/rule/{{ kibana_alert_rule.id }}"
+    method: PUT
+    headers:
+      kbn-xsrf: "true"
+      Content-Type: application/json
+    body_format: json
+    body:
+      name: "{{ kibana_alert_rule.name }}"
+      tags:
+        - atlas-logs
+      schedule:
+        interval: "{{ kibana_alert_rule.schedule }}"
+      params: "{{ kibana_alert_rule.params }}"
+      actions: []
+    url_username: "{{ k8s_users.kibana_dashboard }}"
+    url_password: "{{ k8s_secrets.kibana_elastic_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code:
+      - 200
+      - 400
+      - 401
+      - 403
+  register: kibana_alert_put
+  failed_when: false
+
+- name: Fail if PUT Atlas Kibana log alert {{ kibana_alert_rule.id }} was rejected
+  ansible.builtin.fail:
+    msg: >-
+      PUT /api/alerting/rule/{{ kibana_alert_rule.id }} HTTP
+      {{ kibana_alert_put.status | default('n/a') }}:
+      {{ kibana_alert_put.json | default(kibana_alert_put.content) | default(kibana_alert_put.msg) | default('') }}
+  when:
+    - kibana_alert_update | bool
+    - kibana_alert_put.status | default(0) not in [200]

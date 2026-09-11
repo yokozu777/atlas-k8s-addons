@@ -1,0 +1,97 @@
+---
+- name: Resolve cluster workspace id
+  ansible.builtin.set_fact:
+    cluster_workspace_id: >-
+      {{
+        lookup('ansible.builtin.env', 'CLUSTER_WORKSPACE_ID', default='')
+        | default(cluster_workspace_id | default('', true), true)
+        | default(k8s_cluster_domain | default(cluster_domain | default('', true), true), true)
+      }}
+
+- name: Resolve cluster workspace parent
+  ansible.builtin.set_fact:
+    cluster_workspace_parent: >-
+      {{
+        lookup('ansible.builtin.env', 'CLUSTER_WORKSPACE_PARENT', default='')
+        | default(cluster_workspace_parent | default('./workspace', true), true)
+      }}
+
+- name: Resolve cluster workspace root
+  ansible.builtin.set_fact:
+    cluster_workspace_root: >-
+      {{
+        lookup('ansible.builtin.env', 'CLUSTER_WORKSPACE_ROOT', default='')
+        | default(cluster_workspace_root | default('', true), true)
+        | default(cluster_workspace_parent ~ '/' ~ cluster_workspace_id, true)
+      }}
+
+- name: Align controller paths under resolved workspace root
+  ansible.builtin.set_fact:
+    controller_workspace: "{{ cluster_workspace_root }}/controller-state"
+    controller_manifests_dir: "{{ cluster_workspace_root }}/controller-state/manifests"
+    controller_reports_dir: "{{ cluster_workspace_root }}/controller-state/reports"
+    controller_kubeconfig: "{{ cluster_workspace_root }}/controller-state/kubeconfig/admin.conf"
+    controller_python_venv: "{{ cluster_workspace_root }}/controller-state/venv"
+    controller_bin_dir: "{{ cluster_workspace_root }}/controller-state/bin"
+    controller_helm_config_dir: "{{ cluster_workspace_root }}/controller-state/helm-config"
+    controller_helm_cache_dir: "{{ cluster_workspace_root }}/controller-state/helm-config/cache"
+    controller_ca_cert_dir: "{{ cluster_workspace_root }}/controller-state/certs"
+    controller_ca_cert_path: "{{ cluster_workspace_root }}/controller-state/certs/{{ k8s_ca_cert_filename | default('ca.crt') }}"
+    controller_ssl_cert_file: "{{ cluster_workspace_root }}/controller-state/certs/ca-bundle.crt"
+    controller_tls_environment: "{{
+      {
+        'SSL_CERT_FILE': cluster_workspace_root ~ '/controller-state/certs/ca-bundle.crt',
+        'REQUESTS_CA_BUNDLE': cluster_workspace_root ~ '/controller-state/certs/ca-bundle.crt',
+        'GIT_SSL_CAINFO': cluster_workspace_root ~ '/controller-state/certs/ca-bundle.crt'
+      } if (pki_ca_url | default('') | length > 0) else {}
+    }}"
+    controller_staging_dir: "{{ cluster_workspace_root }}/controller-state/staging"
+    controller_secrets_dir: "{{ cluster_workspace_root }}/controller-state/secrets"
+    k8s_control_plane_scripts_dir: "{{ cluster_workspace_root }}/controller-state/scripts"
+    keycloak_tf_workspace: "{{ cluster_workspace_root }}/controller-state/staging/keycloak-realm"
+    k8s_kibana_chart_dir: "{{ cluster_workspace_root }}/controller-state/staging/kibana"
+    k8s_kubeconfig: "{{ cluster_workspace_root }}/controller-state/kubeconfig/admin.conf"
+    k8s_manifests_dir: "{{ cluster_workspace_root }}/controller-state/manifests"
+    k8s_python_venv: "{{ cluster_workspace_root }}/controller-state/venv"
+    provision_tf_workspace_dir: "{{ cluster_workspace_root }}/tf_workspace"
+    provision_generated_variables_tf: "{{ cluster_workspace_root }}/generated/variables.tf"
+    build_workdir: "{{ cluster_workspace_root }}/build/workspace"
+    build_state_file: "{{ cluster_workspace_root }}/build/build_templates_state.json"
+
+- name: Assert cluster workspace id is set
+  ansible.builtin.assert:
+    that:
+      - cluster_workspace_id | length > 0
+      - cluster_workspace_id is match('^[a-zA-Z0-9.-]+$')
+    fail_msg: >-
+      cluster_workspace_id must be set via CLUSTER_WORKSPACE_ID, group_vars/all/atlas-k8s-addons.yml,
+      or k8s_cluster_domain (allowed charset: a-zA-Z0-9.-)
+
+- name: Assert cluster workspace id matches k8s_cluster_domain when both are set
+  ansible.builtin.assert:
+    that:
+      - cluster_workspace_id == k8s_cluster_domain
+    fail_msg: >-
+      cluster_workspace_id ({{ cluster_workspace_id }}) must equal k8s_cluster_domain
+      ({{ k8s_cluster_domain }}) — override CLUSTER_WORKSPACE_ID only for intentional multi-workspace tests
+  when: k8s_cluster_domain | default('') | length > 0
+
+- name: Assert cluster workspace root is defined
+  ansible.builtin.assert:
+    that:
+      - cluster_workspace_root | default('') | length > 0
+    fail_msg: >-
+      cluster_workspace_root must be defined in group_vars/all/atlas-k8s-addons.yml
+      (or CLUSTER_WORKSPACE_ROOT / CLUSTER_WORKSPACE_PARENT)
+
+- name: Log active cluster workspace
+  ansible.builtin.debug:
+    msg: "cluster workspace: {{ cluster_workspace_root }} (id={{ cluster_workspace_id }})"
+
+- name: Log workspace ansible runtime paths
+  ansible.builtin.debug:
+    msg:
+      - "ansible fact cache: {{ cluster_workspace_root }}/.ansible_facts_cache"
+      - "ansible local tmp: {{ cluster_workspace_root }}/.ansible/tmp"
+      - "controller kubeconfig: {{ controller_kubeconfig }}"
+      - "helm config/cache: {{ controller_helm_config_dir }} / {{ controller_helm_cache_dir }}"

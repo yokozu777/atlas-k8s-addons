@@ -1,0 +1,22 @@
+---
+- name: Validate cluster credentials report is complete
+  ansible.builtin.assert:
+    that:
+      - cluster_credentials_report.meta.cluster_name | default('') | length > 0
+      - cluster_credentials_report.paths.kubeconfig | default('') | length > 0
+      - cluster_credentials_report.access.api_endpoint | default('') | length > 0
+      - cluster_credentials_report.endpoints.oidc_issuer | default('') | length > 0
+      - cluster_credentials_report.endpoints.oauth2_callback | default('') | length > 0
+      - cluster_credentials_report.quick_access | default([]) | length > 0
+      - cluster_credentials_report.dns_secrets | default([]) | length > 0
+      - cluster_credentials_report.ingress_apps | default([]) | length > 0
+    fail_msg: >-
+      cluster_credentials_report is incomplete — check group_vars/all/atlas-k8s-addons.yml, chart states
+      and that role 996_cluster_report runs after platform roles on localhost with kubeconfig
+
+- name: Validate cluster credentials markdown output path
+  ansible.builtin.assert:
+    that:
+      - cluster_credentials_md_file | default('') | length > 0
+      - cluster_credentials_md_file | dirname == controller_reports_dir
+    fail_msg: cluster_credentials_md_file must be set and live under controller_reports_dir

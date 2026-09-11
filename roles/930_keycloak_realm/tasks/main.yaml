@@ -1,0 +1,641 @@
+    - name: Remove existing Keycloak realm Terraform workspace if present
+      ansible.builtin.file:
+        path: "{{ keycloak_tf_workspace }}"
+        state: absent
+
+    - name: Ensure Keycloak realm Terraform workspace exists
+      ansible.builtin.file:
+        path: "{{ keycloak_tf_workspace }}"
+        state: directory
+        mode: '0755'
+
+    - name: Template main.tf into Keycloak realm Terraform workspace
+      ansible.builtin.template:
+        src: main.tf.j2
+        dest: "{{ keycloak_tf_workspace }}/main.tf"
+        mode: '0644'
+
+    - name: Download step-ca root bundle for Terraform TLS trust
+      ansible.builtin.get_url:
+        url: >-
+          {{
+            pki_ca_url
+            if pki_ca_url is string
+            else (pki_ca_url | first)
+          }}
+        dest: "{{ keycloak_tf_workspace }}/root-ca.pem"
+        mode: '0644'
+        validate_certs: false
+
+    - name: Wait for Keycloak to be reachable before Terraform
+      ansible.builtin.uri:
+        url: "{{ keycloak_url }}/auth/realms/master/protocol/openid-connect/token"
+        method: POST
+        status_code: 400
+        validate_certs: false
+      register: keycloak_check
+      retries: 600
+      delay: 3
+      until: keycloak_check.status is defined and keycloak_check.status in [400, 401, 403]
+
+    - name: Get Keycloak admin access token
+      ansible.builtin.uri:
+        url: "{{ keycloak_url }}/auth/realms/master/protocol/openid-connect/token"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          grant_type: password
+          client_id: admin-cli
+          username: admin
+          password: "{{ k8s_secrets.keycloak_admin_password }}"
+        validate_certs: false
+        status_code: 200
+      register: kc_token
+      no_log: true
+
+    - name: Check if Keycloak realm already exists
+      ansible.builtin.uri:
+        url: "{{ keycloak_url }}/auth/admin/realms/{{ keycloak_realm }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ kc_token.json.access_token }}"
+        validate_certs: false
+        status_code: [200, 404]
+      register: kc_realm_check
+
+    - name: Find preinstalled Keycloak Terraform provider
+      ansible.builtin.find:
+        paths: "{{ keycloak_tf_plugin_dir }}/registry.terraform.io/keycloak/keycloak/{{ keycloak_tf_provider_version }}/linux_amd64"
+        patterns: terraform-provider-keycloak*
+        file_type: any
+      register: keycloak_tf_plugin_find
+
+    - name: Note whether Keycloak Terraform provider is preinstalled locally
+      ansible.builtin.set_fact:
+        keycloak_tf_plugins_preinstalled: "{{ keycloak_tf_plugin_find.matched | default(0) | int > 0 }}"
+
+    - name: Initialize ephemeral Terraform workspace using preinstalled provider directory
+      ansible.builtin.command:
+        argv:
+          - terraform
+          - init
+          - -input=false
+          - -no-color
+          - "-plugin-dir={{ keycloak_tf_plugin_dir }}"
+        chdir: "{{ keycloak_tf_workspace }}"
+      register: keycloak_tf_init_preinstalled
+      changed_when: >-
+        'Terraform has been successfully initialized' in keycloak_tf_init_preinstalled.stdout
+      when: keycloak_tf_plugins_preinstalled | default(false) | bool
+
+    - name: Ensure Terraform plugin cache directory exists
+      ansible.builtin.file:
+        path: "{{ keycloak_tf_plugin_cache_dir }}"
+        state: directory
+        mode: "0755"
+      when: not (keycloak_tf_plugins_preinstalled | default(false) | bool)
+
+    - name: Initialize ephemeral Terraform workspace with plugin download cache
+      ansible.builtin.command:
+        cmd: terraform init -input=false -no-color
+        chdir: "{{ keycloak_tf_workspace }}"
+      environment:
+        TF_PLUGIN_CACHE_DIR: "{{ keycloak_tf_plugin_cache_dir }}"
+      register: keycloak_tf_init_cached
+      changed_when: >-
+        'Terraform has been successfully initialized' in keycloak_tf_init_cached.stdout
+      when: not (keycloak_tf_plugins_preinstalled | default(false) | bool)
+
+    - name: Import existing Keycloak resources into ephemeral Terraform state
+      when: kc_realm_check.status == 200
+      block:
+        - name: Lookup Keycloak admin user id
+          ansible.builtin.uri:
+            url: >-
+              {{ keycloak_url }}/auth/admin/realms/{{ keycloak_realm }}/users?username=admin&exact=true
+            headers:
+              Authorization: "Bearer {{ kc_token.json.access_token }}"
+            validate_certs: false
+            status_code: 200
+          register: kc_admin_user
+
+        - name: Lookup Keycloak client scopes
+          ansible.builtin.uri:
+            url: "{{ keycloak_url }}/auth/admin/realms/{{ keycloak_realm }}/client-scopes"
+            headers:
+              Authorization: "Bearer {{ kc_token.json.access_token }}"
+            validate_certs: false
+            status_code: 200
+          register: kc_client_scopes
+
+        - name: Lookup Keycloak OIDC clients for import
+          ansible.builtin.uri:
+            url: >-
+              {{ keycloak_url }}/auth/admin/realms/{{ keycloak_realm }}/clients?clientId={{ item }}
+            headers:
+              Authorization: "Bearer {{ kc_token.json.access_token }}"
+            validate_certs: false
+            status_code: 200
+          register: kc_oidc_clients
+          loop:
+            - oauth2-proxy
+            - envoy-gateway
+            - vault
+            - argocd
+            - kubernetes
+            - pinniped-supervisor
+
+        - name: Lookup Keycloak groups for import
+          ansible.builtin.uri:
+            url: >-
+              {{ keycloak_url }}/auth/admin/realms/{{ keycloak_realm }}/groups?search={{ item }}&exact=true
+            headers:
+              Authorization: "Bearer {{ kc_token.json.access_token }}"
+            validate_certs: false
+            status_code: 200
+          register: kc_groups
+          loop:
+            - vault-admins
+            - argocd-admins
+            - k8s-admins
+
+        - name: Lookup Keycloak realm role argocd-access
+          ansible.builtin.uri:
+            url: "{{ keycloak_url }}/auth/admin/realms/{{ keycloak_realm }}/roles/argocd-access"
+            headers:
+              Authorization: "Bearer {{ kc_token.json.access_token }}"
+            validate_certs: false
+            status_code: [200, 404]
+          register: kc_argocd_access_role
+
+        - name: Resolve Keycloak import ids
+          ansible.builtin.set_fact:
+            kc_admin_user_id: "{{ (kc_admin_user.json | first).id if (kc_admin_user.json | length) > 0 else '' }}"
+            kc_aud_scope_id: >-
+              {{
+                (
+                  kc_client_scopes.json
+                  | selectattr('name', 'equalto', 'aud-oauth2-proxy')
+                  | list
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_aud_eg_scope_id: >-
+              {{
+                (
+                  kc_client_scopes.json
+                  | selectattr('name', 'equalto', 'aud-envoy-gateway')
+                  | list
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_aud_vault_scope_id: >-
+              {{
+                (
+                  kc_client_scopes.json
+                  | selectattr('name', 'equalto', 'aud-vault')
+                  | list
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_aud_argocd_scope_id: >-
+              {{
+                (
+                  kc_client_scopes.json
+                  | selectattr('name', 'equalto', 'aud-argocd')
+                  | list
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_aud_kubernetes_scope_id: >-
+              {{
+                (
+                  kc_client_scopes.json
+                  | selectattr('name', 'equalto', 'aud-kubernetes')
+                  | list
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_aud_pinniped_supervisor_scope_id: >-
+              {{
+                (
+                  kc_client_scopes.json
+                  | selectattr('name', 'equalto', 'aud-pinniped-supervisor')
+                  | list
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_oauth2_client_id: >-
+              {{
+                (
+                  (
+                    kc_oidc_clients.results
+                    | selectattr('item', 'equalto', 'oauth2-proxy')
+                    | map(attribute='json')
+                    | first
+                    | default([])
+                  )
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_eg_client_id: >-
+              {{
+                (
+                  (
+                    kc_oidc_clients.results
+                    | selectattr('item', 'equalto', 'envoy-gateway')
+                    | map(attribute='json')
+                    | first
+                    | default([])
+                  )
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_vault_client_id: >-
+              {{
+                (
+                  (
+                    kc_oidc_clients.results
+                    | selectattr('item', 'equalto', 'vault')
+                    | map(attribute='json')
+                    | first
+                    | default([])
+                  )
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_argocd_client_id: >-
+              {{
+                (
+                  (
+                    kc_oidc_clients.results
+                    | selectattr('item', 'equalto', 'argocd')
+                    | map(attribute='json')
+                    | first
+                    | default([])
+                  )
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_kubernetes_client_id: >-
+              {{
+                (
+                  (
+                    kc_oidc_clients.results
+                    | selectattr('item', 'equalto', 'kubernetes')
+                    | map(attribute='json')
+                    | first
+                    | default([])
+                  )
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_pinniped_client_id: >-
+              {{
+                (
+                  (
+                    kc_oidc_clients.results
+                    | selectattr('item', 'equalto', 'pinniped-supervisor')
+                    | map(attribute='json')
+                    | first
+                    | default([])
+                  )
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_vault_admins_group_id: >-
+              {{
+                (
+                  kc_groups.results[0].json
+                  | selectattr('name', 'equalto', 'vault-admins')
+                  | list
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_argocd_admins_group_id: >-
+              {{
+                (
+                  kc_groups.results[1].json
+                  | selectattr('name', 'equalto', 'argocd-admins')
+                  | list
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_k8s_admins_group_id: >-
+              {{
+                (
+                  kc_groups.results[2].json
+                  | selectattr('name', 'equalto', 'k8s-admins')
+                  | list
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_argocd_access_role_id: "{{ kc_argocd_access_role.json.id if kc_argocd_access_role.status == 200 else '' }}"
+            kc_aud_mapper_id: ""
+            kc_aud_eg_mapper_id: ""
+            kc_aud_vault_mapper_id: ""
+            kc_aud_argocd_mapper_id: ""
+            kc_aud_kubernetes_mapper_id: ""
+            kc_aud_pinniped_supervisor_mapper_id: ""
+            kc_vault_groups_mapper_id: ""
+            kc_argocd_groups_mapper_id: ""
+            kc_kubernetes_groups_mapper_id: ""
+            kc_pinniped_groups_mapper_id: ""
+
+        - name: Lookup Keycloak client-scope protocol mappers
+          ansible.builtin.uri:
+            url: >-
+              {{ keycloak_url }}/auth/admin/realms/{{ keycloak_realm }}/client-scopes/{{ item.id }}/protocol-mappers/models
+            headers:
+              Authorization: "Bearer {{ kc_token.json.access_token }}"
+            validate_certs: false
+            status_code: 200
+          register: kc_scope_mappers
+          loop:
+            - { key: oauth2, name: aud-oauth2-proxy, id: "{{ kc_aud_scope_id }}" }
+            - { key: eg, name: aud-envoy-gateway, id: "{{ kc_aud_eg_scope_id }}" }
+            - { key: vault, name: aud-vault, id: "{{ kc_aud_vault_scope_id }}" }
+            - { key: argocd, name: aud-argocd, id: "{{ kc_aud_argocd_scope_id }}" }
+            - { key: kubernetes, name: aud-kubernetes, id: "{{ kc_aud_kubernetes_scope_id }}" }
+            - { key: pinniped, name: aud-pinniped-supervisor, id: "{{ kc_aud_pinniped_supervisor_scope_id }}" }
+          when: item.id | length > 0
+
+        - name: Lookup Keycloak vault client protocol mappers
+          ansible.builtin.uri:
+            url: >-
+              {{ keycloak_url }}/auth/admin/realms/{{ keycloak_realm }}/clients/{{ kc_vault_client_id }}/protocol-mappers/models
+            headers:
+              Authorization: "Bearer {{ kc_token.json.access_token }}"
+            validate_certs: false
+            status_code: 200
+          register: kc_vault_client_mappers
+          when: kc_vault_client_id | length > 0
+
+        - name: Lookup Keycloak argocd client protocol mappers
+          ansible.builtin.uri:
+            url: >-
+              {{ keycloak_url }}/auth/admin/realms/{{ keycloak_realm }}/clients/{{ kc_argocd_client_id }}/protocol-mappers/models
+            headers:
+              Authorization: "Bearer {{ kc_token.json.access_token }}"
+            validate_certs: false
+            status_code: 200
+          register: kc_argocd_client_mappers
+          when: kc_argocd_client_id | length > 0
+
+        - name: Lookup Keycloak kubernetes client protocol mappers
+          ansible.builtin.uri:
+            url: >-
+              {{ keycloak_url }}/auth/admin/realms/{{ keycloak_realm }}/clients/{{ kc_kubernetes_client_id }}/protocol-mappers/models
+            headers:
+              Authorization: "Bearer {{ kc_token.json.access_token }}"
+            validate_certs: false
+            status_code: 200
+          register: kc_kubernetes_client_mappers
+          when: kc_kubernetes_client_id | length > 0
+
+        - name: Lookup Keycloak pinniped-supervisor client protocol mappers
+          ansible.builtin.uri:
+            url: >-
+              {{ keycloak_url }}/auth/admin/realms/{{ keycloak_realm }}/clients/{{ kc_pinniped_client_id }}/protocol-mappers/models
+            headers:
+              Authorization: "Bearer {{ kc_token.json.access_token }}"
+            validate_certs: false
+            status_code: 200
+          register: kc_pinniped_client_mappers
+          when: kc_pinniped_client_id | length > 0
+
+        - name: Resolve Keycloak protocol mapper ids
+          ansible.builtin.set_fact:
+            kc_aud_mapper_id: >-
+              {{
+                (
+                  (
+                    kc_scope_mappers.results
+                    | selectattr('json', 'defined')
+                    | selectattr('item.key', 'equalto', 'oauth2')
+                    | map(attribute='json')
+                    | first
+                    | default([])
+                  )
+                  | selectattr('name', 'equalto', 'aud-oauth2-proxy')
+                  | list
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_aud_eg_mapper_id: >-
+              {{
+                (
+                  (
+                    kc_scope_mappers.results
+                    | selectattr('json', 'defined')
+                    | selectattr('item.key', 'equalto', 'eg')
+                    | map(attribute='json')
+                    | first
+                    | default([])
+                  )
+                  | selectattr('name', 'equalto', 'aud-envoy-gateway')
+                  | list
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_aud_vault_mapper_id: >-
+              {{
+                (
+                  (
+                    kc_scope_mappers.results
+                    | selectattr('json', 'defined')
+                    | selectattr('item.key', 'equalto', 'vault')
+                    | map(attribute='json')
+                    | first
+                    | default([])
+                  )
+                  | selectattr('name', 'equalto', 'aud-vault')
+                  | list
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_aud_argocd_mapper_id: >-
+              {{
+                (
+                  (
+                    kc_scope_mappers.results
+                    | selectattr('json', 'defined')
+                    | selectattr('item.key', 'equalto', 'argocd')
+                    | map(attribute='json')
+                    | first
+                    | default([])
+                  )
+                  | selectattr('name', 'equalto', 'aud-argocd')
+                  | list
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_aud_kubernetes_mapper_id: >-
+              {{
+                (
+                  (
+                    kc_scope_mappers.results
+                    | selectattr('json', 'defined')
+                    | selectattr('item.key', 'equalto', 'kubernetes')
+                    | map(attribute='json')
+                    | first
+                    | default([])
+                  )
+                  | selectattr('name', 'equalto', 'aud-kubernetes')
+                  | list
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_aud_pinniped_supervisor_mapper_id: >-
+              {{
+                (
+                  (
+                    kc_scope_mappers.results
+                    | selectattr('json', 'defined')
+                    | selectattr('item.key', 'equalto', 'pinniped')
+                    | map(attribute='json')
+                    | first
+                    | default([])
+                  )
+                  | selectattr('name', 'equalto', 'aud-pinniped-supervisor')
+                  | list
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_vault_groups_mapper_id: >-
+              {{
+                (
+                  (
+                    kc_vault_client_mappers.json
+                    if not (kc_vault_client_mappers.skipped | default(false))
+                    else []
+                  )
+                  | selectattr('name', 'equalto', 'groups')
+                  | list
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_argocd_groups_mapper_id: >-
+              {{
+                (
+                  (
+                    kc_argocd_client_mappers.json
+                    if not (kc_argocd_client_mappers.skipped | default(false))
+                    else []
+                  )
+                  | selectattr('name', 'equalto', 'groups')
+                  | list
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_kubernetes_groups_mapper_id: >-
+              {{
+                (
+                  (
+                    kc_kubernetes_client_mappers.json
+                    if not (kc_kubernetes_client_mappers.skipped | default(false))
+                    else []
+                  )
+                  | selectattr('name', 'equalto', 'groups')
+                  | list
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_pinniped_groups_mapper_id: >-
+              {{
+                (
+                  (
+                    kc_pinniped_client_mappers.json
+                    if not (kc_pinniped_client_mappers.skipped | default(false))
+                    else []
+                  )
+                  | selectattr('name', 'equalto', 'groups')
+                  | list
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+
+        # keycloak/keycloak 5.8.0 has no Importer for
+        # keycloak_openid_client_default_scopes and keycloak_group_memberships
+        # Apply Create reconciles live Keycloak; do not add those addresses here.
+        - name: Terraform import existing Keycloak resources
+          ansible.builtin.command: >-
+            terraform import -no-color {{ item.address }} {{ item.id }}
+          args:
+            chdir: "{{ keycloak_tf_workspace }}"
+          loop:
+            - { address: keycloak_realm.org, id: "{{ keycloak_realm }}" }
+            - { address: keycloak_user.admin_user, id: "{{ keycloak_realm }}/{{ kc_admin_user_id }}" }
+            - { address: keycloak_openid_client_scope.aud_scope, id: "{{ keycloak_realm }}/{{ kc_aud_scope_id }}" }
+            - { address: keycloak_openid_audience_protocol_mapper.aud_mapper, id: "{{ keycloak_realm }}/client-scope/{{ kc_aud_scope_id }}/{{ kc_aud_mapper_id }}" }
+            - { address: keycloak_openid_client.oauth2_proxy_client, id: "{{ keycloak_realm }}/{{ kc_oauth2_client_id }}" }
+            - { address: keycloak_openid_client_scope.aud_eg_scope, id: "{{ keycloak_realm }}/{{ kc_aud_eg_scope_id }}" }
+            - { address: keycloak_openid_audience_protocol_mapper.aud_eg_mapper, id: "{{ keycloak_realm }}/client-scope/{{ kc_aud_eg_scope_id }}/{{ kc_aud_eg_mapper_id }}" }
+            - { address: keycloak_openid_client.envoy_gateway_client, id: "{{ keycloak_realm }}/{{ kc_eg_client_id }}" }
+            - { address: keycloak_openid_client_scope.aud_vault_scope, id: "{{ keycloak_realm }}/{{ kc_aud_vault_scope_id }}" }
+            - { address: keycloak_openid_audience_protocol_mapper.aud_vault_mapper, id: "{{ keycloak_realm }}/client-scope/{{ kc_aud_vault_scope_id }}/{{ kc_aud_vault_mapper_id }}" }
+            - { address: keycloak_openid_client.vault_client, id: "{{ keycloak_realm }}/{{ kc_vault_client_id }}" }
+            - { address: keycloak_group.vault_admins, id: "{{ keycloak_realm }}/{{ kc_vault_admins_group_id }}" }
+            - { address: keycloak_openid_group_membership_protocol_mapper.vault_groups, id: "{{ keycloak_realm }}/client/{{ kc_vault_client_id }}/{{ kc_vault_groups_mapper_id }}" }
+            - { address: keycloak_openid_client_scope.aud_argocd_scope, id: "{{ keycloak_realm }}/{{ kc_aud_argocd_scope_id }}" }
+            - { address: keycloak_openid_audience_protocol_mapper.aud_argocd_mapper, id: "{{ keycloak_realm }}/client-scope/{{ kc_aud_argocd_scope_id }}/{{ kc_aud_argocd_mapper_id }}" }
+            - { address: keycloak_openid_client.argocd_client, id: "{{ keycloak_realm }}/{{ kc_argocd_client_id }}" }
+            - { address: keycloak_group.argocd_admins, id: "{{ keycloak_realm }}/{{ kc_argocd_admins_group_id }}" }
+            - { address: keycloak_openid_group_membership_protocol_mapper.argocd_groups, id: "{{ keycloak_realm }}/client/{{ kc_argocd_client_id }}/{{ kc_argocd_groups_mapper_id }}" }
+            - { address: keycloak_role.argocd_access, id: "{{ keycloak_realm }}/{{ kc_argocd_access_role_id }}" }
+            - { address: keycloak_group_roles.argocd_admins_roles, id: "{{ keycloak_realm }}/{{ kc_argocd_admins_group_id }}" }
+            - { address: keycloak_openid_client_scope.aud_kubernetes_scope, id: "{{ keycloak_realm }}/{{ kc_aud_kubernetes_scope_id }}" }
+            - { address: keycloak_openid_audience_protocol_mapper.aud_kubernetes_mapper, id: "{{ keycloak_realm }}/client-scope/{{ kc_aud_kubernetes_scope_id }}/{{ kc_aud_kubernetes_mapper_id }}" }
+            - { address: keycloak_openid_client.kubernetes_client, id: "{{ keycloak_realm }}/{{ kc_kubernetes_client_id }}" }
+            - { address: keycloak_group.k8s_admins, id: "{{ keycloak_realm }}/{{ kc_k8s_admins_group_id }}" }
+            - { address: keycloak_openid_group_membership_protocol_mapper.kubernetes_groups, id: "{{ keycloak_realm }}/client/{{ kc_kubernetes_client_id }}/{{ kc_kubernetes_groups_mapper_id }}" }
+            - { address: keycloak_openid_client_scope.aud_pinniped_supervisor_scope, id: "{{ keycloak_realm }}/{{ kc_aud_pinniped_supervisor_scope_id }}" }
+            - { address: keycloak_openid_audience_protocol_mapper.aud_pinniped_supervisor_mapper, id: "{{ keycloak_realm }}/client-scope/{{ kc_aud_pinniped_supervisor_scope_id }}/{{ kc_aud_pinniped_supervisor_mapper_id }}" }
+            - { address: keycloak_openid_client.pinniped_supervisor_client, id: "{{ keycloak_realm }}/{{ kc_pinniped_client_id }}" }
+            - { address: keycloak_openid_group_membership_protocol_mapper.pinniped_supervisor_groups, id: "{{ keycloak_realm }}/client/{{ kc_pinniped_client_id }}/{{ kc_pinniped_groups_mapper_id }}" }
+          when:
+            - item.id | length > 0
+            - not (item.id | regex_search('/$'))
+            - not (item.id | regex_search('//'))
+          changed_when: true
+
+    - name: Apply Keycloak realm Terraform configuration
+      community.general.terraform:
+        project_path: "{{ keycloak_tf_workspace }}"
+        state: present
+        force_init: false
+        plugin_paths:
+          - "{{ keycloak_tf_plugin_dir }}"
+
+    - name: Bind argocd-browser flow with /argocd-admins group gate
+      ansible.builtin.include_tasks: argocd_browser_flow.yml
+
+    - name: Remove ephemeral Keycloak realm Terraform workspace after apply
+      ansible.builtin.file:
+        path: "{{ keycloak_tf_workspace }}"
+        state: absent

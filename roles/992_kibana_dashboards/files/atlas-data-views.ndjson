@@ -1,0 +1,5 @@
+{"attributes":{"color":"#6092C0","description":"Atlas saved objects","name":"atlas"},"coreMigrationVersion":"8.8.0","id":"atlas-tag-atlas","managed":false,"references":[],"type":"tag","typeMigrationVersion":"8.0.0"}
+{"attributes":{"color":"#54B399","description":"Cluster logs","name":"logs"},"coreMigrationVersion":"8.8.0","id":"atlas-tag-logs","managed":false,"references":[],"type":"tag","typeMigrationVersion":"8.0.0"}
+{"attributes":{"color":"#BD271E","description":"NOC landing: overview, cluster, pipeline","name":"noc"},"coreMigrationVersion":"8.8.0","id":"atlas-tag-noc","managed":false,"references":[],"type":"tag","typeMigrationVersion":"8.0.0"}
+{"attributes":{"title":"kube-logs-*","timeFieldName":"@timestamp","name":"kube-logs-*"},"coreMigrationVersion":"8.8.0","id":"k8s","managed":false,"references":[],"type":"index-pattern","typeMigrationVersion":"7.11.0"}
+{"attributes":{"title":"host-logs-*","timeFieldName":"@timestamp","name":"host-logs-*"},"coreMigrationVersion":"8.8.0","id":"host","managed":false,"references":[],"type":"index-pattern","typeMigrationVersion":"7.11.0"}

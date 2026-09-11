@@ -1,0 +1,64 @@
+# Local / generated (do not commit)
+inventory.yml
+hosts
+pub_keys/
+workspace/
+.ansible/
+.ansible_facts_cache/
+*.retry
+vars-file.yml
+ansible_local_execute.cfg
+secrets.yml
+**/secrets.yml
+# Product secrets overlays (Vault in git) — never ignore.
+!**/*.secrets.yml
+!**/*.secrets.yaml
+# Role task files named secrets.yml are code (validate gates), not credentials.
+!roles/**/tasks/secrets.yml
+*.vault
+**/vault.yml
+kubeconfig*
+**/kubeconfig*
+# Role Jinja for 941_k8s_oidc (name matches generated admin kubeconfig glob).
+!roles/**/templates/kubeconfig*.j2
+
+# Host overrides (keep example only)
+host_vars/*
+!host_vars/example.yml
+!host_vars/*.example.yml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+venv/
+.venv/
+ENV/
+env/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs / temp
+*.log
+logs/
+*.tmp
+*.bak
+*.backup
+*.token
+
+# OS
+.DS_Store
+Thumbs.db

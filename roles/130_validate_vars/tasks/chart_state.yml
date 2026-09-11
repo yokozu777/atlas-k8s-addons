@@ -1,0 +1,11 @@
+---
+- name: Assert *_chart_state values are present, skip, or absent
+  ansible.builtin.assert:
+    that:
+      - lookup('vars', item, default='present') | default('present') in k8s_chart_state_allowed
+    fail_msg: >-
+      {{ item }} must be one of {{ k8s_chart_state_allowed | join(', ') }}
+      (got {{ lookup('vars', item, default='present') | default('present') }})
+  loop: "{{ k8s_chart_state_vars }}"
+  loop_control:
+    label: "{{ item }}"

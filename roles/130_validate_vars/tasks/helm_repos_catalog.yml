@@ -1,0 +1,18 @@
+---
+- name: Assert helm_repos entries align with helm_repo_upstreams
+  ansible.builtin.assert:
+    that:
+      - item.name in (helm_repo_upstreams | map(attribute='name') | list)
+      - (helm_repo_upstreams | selectattr('name', 'equalto', item.name) | first).nexus_path == item.path
+    fail_msg: >-
+      helm_repos entry {{ item.name }} must exist in helm_repo_upstreams with matching nexus_path
+      (got path={{ item.path }})
+  loop: "{{ helm_repos | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Assert helm_repo_upstreams covers every helm_repos name
+  ansible.builtin.assert:
+    that:
+      - (helm_repos | map(attribute='name') | list | difference(helm_repo_upstreams | map(attribute='name') | list) | length) == 0
+    fail_msg: helm_repo_upstreams and helm_repos must list the same helm repo names

@@ -1,0 +1,129 @@
+elasticsearchHosts: "https://elasticsearch.{{ k8s_cluster_domain }}"
+elasticsearchCertificateSecret: elastic-certificates
+elasticsearchCertificateAuthoritiesFile: ca.crt
+elasticsearchCredentialSecret: elastic-credentials
+
+protocol: https
+
+resources:
+  requests:
+    cpu: "0"
+    # memory: "0"
+  limits:
+    cpu: "0"
+    # memory: "0"
+
+replicas: 1
+image: "elastic/kibana"
+imageTag: "{{ KibanaimageTag }}"
+imagePullPolicy: "IfNotPresent"
+# resources:
+#   requests:
+#     cpu: "1500m"
+#     memory: "2Gi"
+#   limits:
+#     cpu: "1500m"
+#     memory: "2Gi"
+
+automountToken: true
+
+extraEnvs:
+  - name: "NODE_OPTIONS"
+    value: "--max-old-space-size=1800"
+  - name: "KIBANA_ENCRYPTION_KEY"
+    valueFrom:
+      secretKeyRef:
+        name: kibana
+        key: encryptionkey
+
+kibanaConfig:
+  kibana.yml: |
+    server.ssl:
+      enabled: true
+      key: /usr/share/kibana/config/certs/tls.key
+      certificate: /usr/share/kibana/config/certs/tls.crt
+      certificateAuthorities: /usr/share/kibana/config/certs/ca.crt
+    telemetry.enabled: false
+    monitoring.ui.enabled: false
+    monitoring.kibana.collection.enabled: false
+    telemetry.allowChangingOptInStatus.enabled: false
+    telemetry.optIn: false
+    xpack.observabilityAIAssistant.enabled: false
+    xpack.reporting.roles.enabled: false
+    xpack.encryptedSavedObjects.encryptionKey: ${KIBANA_ENCRYPTION_KEY}
+    xpack.reporting.encryptionKey: ${KIBANA_ENCRYPTION_KEY}
+    xpack.security.encryptionKey: ${KIBANA_ENCRYPTION_KEY}
+    xpack.screenshotting.browser.chromium.disableSandbox: true
+    xpack.fleet.enabled: false
+    uiSettings.overrides:
+      defaultRoute: "/app/dashboards#/view/atlas-logs-cluster"
+    elasticsearch.ssl:
+      certificateAuthorities: /usr/share/kibana/config/certs/ca.crt
+      verificationMode: certificate
+
+# kibanaConfig:
+#   kibana.yml: |
+#     server.ssl:
+#       enabled: "true"
+#       key: "/usr/share/kibana/config/certs/tls.key"
+#       certificate: "/usr/share/kibana/config/certs/tls.crt"
+#       certificateAuthorities: [ "/usr/share/kibana/config/certs/ca.crt" ]
+#       clientAuthentication: "none"
+#       supportedProtocols: [ "TLSv1.2", "TLSv1.3" ]
+#     elasticsearch.ssl:
+#       certificateAuthorities: [ "/usr/share/kibana/config/certs/ca.crt" ]
+#       verificationMode: "certificate"
+#     newsfeed.enabled: "false"
+#     telemetry.enabled: "false"
+#     telemetry.optIn: "false"
+
+# kibanaConfig:
+#    kibana.yml: |
+#     server.ssl:
+#       enabled: true
+#       key: /usr/share/kibana/config/certs/mysite-without-pass.key
+#       certificate: /usr/share/kibana/config/certs/mysite.crt
+#     xpack.security.encryptionKey: "something_at_least_32_characters"
+#     elasticsearch.ssl:
+#       certificateAuthorities: /usr/share/kibana/config/certs/mysite.crt
+#       verificationMode: certificate
+
+
+
+#secretMounts:
+#  - name: "kibana-certificates"
+#    secretName: "elastic-certificates"
+#    path: "/usr/share/kibana/config/certs"
+#    defaultMode: "0755"
+
+    
+healthCheckPath: "/api/status"
+httpPort: 5601
+service:
+  type: ClusterIP
+  loadBalancerIP: ""
+  port: 5601
+  nodePort: ""
+  labels: {}
+  annotations: {}
+    # cloud.google.com/load-balancer-type: "Internal"
+    # service.beta.kubernetes.io/aws-load-balancer-internal: 0.0.0.0/0
+    # service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+    # service.beta.kubernetes.io/openstack-internal-load-balancer: "true"
+    # service.beta.kubernetes.io/cce-load-balancer-internal-vpc: "true"
+  loadBalancerSourceRanges: []
+    # 0.0.0.0/0
+ # httpPortName: http
+
+# lifecycle:
+#   postStart:
+#     exec:
+#       command:
+#         - bash
+#         - -c
+#         - |
+#           #!/bin/bash
+#           # Import a dashboard
+#           KB_URL=http://localhost:5601
+#           while [[ "$(curl -s -o /dev/null -w '%{http_code}\n' -L $KB_URL)" != "200" ]]; do sleep 1; done
+#           curl -XPOST "$KB_URL/api/kibana/dashboards/import" -H "Content-Type: application/json" -H 'kbn-xsrf: true' -d'{"objects":[{"type":"index-pattern","id":"my-pattern","attributes":{"title":"my-pattern-*"}},{"type":"dashboard","id":"my-dashboard","attributes":{"title":"Look at my dashboard"}}]}' 

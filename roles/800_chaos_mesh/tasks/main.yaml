@@ -1,0 +1,55 @@
+    - name: Remove {{ chaos_mesh_namespace }} Helm chart (absent)
+      when: chaos_mesh_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: chaos-mesh
+            namespace: "{{ chaos_mesh_namespace }}"
+        helm_chart_absent_delete_namespace: true
+        helm_chart_absent_namespaces:
+          - "{{ chaos_mesh_namespace }}"
+        helm_chart_absent_ingress_app_names:
+          - chaos-dashboard
+        helm_chart_absent_extra_manifests:
+          - "{{ k8s_manifests_dir }}/chaos-mesh-servicemonitor.yaml"
+        helm_chart_absent_cluster_resources:
+          - api_version: admissionregistration.k8s.io/v1
+            kind: MutatingWebhookConfiguration
+            name: chaos-mesh-mutation
+          - api_version: admissionregistration.k8s.io/v1
+            kind: ValidatingWebhookConfiguration
+            name: chaos-mesh-validation
+          - api_version: admissionregistration.k8s.io/v1
+            kind: ValidatingWebhookConfiguration
+            name: chaos-mesh-validation-auth
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/chaos_mesh_values.yaml"
+          - "{{ k8s_manifests_dir }}/chaos-mesh-servicemonitor.yaml"
+
+    - name: Install/configure chaos_mesh chart
+      when: chaos_mesh_chart_state | default('present') == 'present'
+      block:
+        - name: Render chaos-mesh helm values
+          ansible.builtin.template:
+            src: chaos_mesh_values.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/chaos_mesh_values.yaml"
+            mode: '0644'
+
+        - name: Helming {{ chaos_mesh_namespace }}
+          ansible.builtin.command: >-
+            helm upgrade --install chaos-mesh chaos-mesh/chaos-mesh
+            --namespace {{ chaos_mesh_namespace }} --create-namespace
+            -f {{ k8s_manifests_dir }}/chaos_mesh_values.yaml
+            --set chaosDaemon.runtime=containerd
+            --set chaosDaemon.socketPath=/run/containerd/containerd.sock
+            {{ chaos_mesh_chart_version | helm_chart_version_args }}
+
+        - name: Render chaos-mesh ServiceMonitors
+          ansible.builtin.template:
+            src: chaos-mesh-servicemonitor.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/chaos-mesh-servicemonitor.yaml"
+            mode: '0644'
+
+        - name: Apply chaos-mesh ServiceMonitors
+          ansible.builtin.command: >-
+            kubectl --validate=false apply -f {{ k8s_manifests_dir }}/chaos-mesh-servicemonitor.yaml

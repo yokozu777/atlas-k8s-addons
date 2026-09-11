@@ -1,0 +1,51 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: chaos-mesh-controller-manager
+  namespace: {{ chaos_mesh_namespace }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ chaos_mesh_namespace }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: controller-manager
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: chaos-daemon
+  namespace: {{ chaos_mesh_namespace }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ chaos_mesh_namespace }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: chaos-daemon
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: chaos-dashboard
+  namespace: {{ chaos_mesh_namespace }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ chaos_mesh_namespace }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: chaos-dashboard
+  endpoints:
+    - port: metric
+      path: /metrics
+      interval: 30s

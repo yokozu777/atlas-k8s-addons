@@ -1,0 +1,18 @@
+---
+# CI uses profile `min` (fatal/load/syntax). Raise locally with:
+#   ansible-lint --profile basic
+profile: min
+
+exclude_paths:
+  - .cache/
+  - .ansible/
+  - workspace/
+  - tests/__pycache__/
+  - .git/
+  - docs/
+
+# Product-wide vars (k8s_*, controller_*, cluster_workspace_*, *_chart_*) are intentional
+# cross-role contracts. Do not enable var-naming[no-role-prefix] until a coordinated rename.
+skip_list: []
+
+verbosity: 1

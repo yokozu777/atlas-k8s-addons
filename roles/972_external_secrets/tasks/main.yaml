@@ -1,0 +1,93 @@
+    - name: Remove external-secrets Helm chart (absent)
+      when: external_secrets_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: external-secrets
+            namespace: "{{ vault_namespace }}"
+        helm_chart_absent_cluster_resources:
+          - api_version: admissionregistration.k8s.io/v1
+            kind: ValidatingWebhookConfiguration
+            name: externalsecret-validate
+          - api_version: admissionregistration.k8s.io/v1
+            kind: ValidatingWebhookConfiguration
+            name: secretstore-validate
+        helm_chart_absent_extra_manifests:
+          - "{{ k8s_manifests_dir }}/external-secrets-clustersecretstore.yaml"
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/external-secrets.yaml"
+          - "{{ k8s_manifests_dir }}/external-secrets-clustersecretstore.yaml"
+
+    - name: Install/configure external_secrets chart
+      when: external_secrets_chart_state | default('present') == 'present'
+      block:
+        - name: Render external-secrets helm values
+          ansible.builtin.template:
+            src: external-secrets.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/external-secrets.yaml"
+            mode: '0644'
+
+        - name: Helming external-secrets
+          ansible.builtin.command: >-
+            helm upgrade --install {{ item }}
+            --create-namespace
+            {{ external_secrets_chart_version | helm_chart_version_args }}
+          loop:
+            - external-secrets external-secrets/external-secrets -n {{ vault_namespace }} -f {{ k8s_manifests_dir }}/external-secrets.yaml
+
+        - name: Wait for External Secrets deployments
+          ansible.builtin.command: >-
+            kubectl wait deployment
+            --namespace {{ vault_namespace }}
+            -l app.kubernetes.io/instance=external-secrets
+            --for=condition=Available
+            --timeout=300s
+          register: wait_external_secrets
+          until: wait_external_secrets.rc == 0
+          retries: 30
+          delay: 10
+          changed_when: false
+
+        - name: Wait for ClusterSecretStore CRD
+          ansible.builtin.command: >-
+            kubectl wait --for=condition=established
+            crd/clustersecretstores.external-secrets.io --timeout=120s
+          register: wait_clustersecretstore_crd
+          until: wait_clustersecretstore_crd.rc == 0
+          retries: 10
+          delay: 6
+          changed_when: false
+
+        - name: Wait until Vault is unsealed
+          ansible.builtin.command: >-
+            kubectl exec -n {{ vault_namespace }} vault-0 -- vault status
+          register: wait_vault_unsealed_for_eso
+          until: wait_vault_unsealed_for_eso.rc == 0
+          retries: 120
+          delay: 5
+          changed_when: false
+
+        - name: Render Vault ClusterSecretStore
+          ansible.builtin.template:
+            src: clustersecretstore.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/external-secrets-clustersecretstore.yaml"
+            mode: '0644'
+
+        - name: Apply Vault ClusterSecretStore
+          ansible.builtin.command: >-
+            kubectl --validate=false apply
+            -f {{ k8s_manifests_dir }}/external-secrets-clustersecretstore.yaml
+          register: apply_clustersecretstore
+          until: apply_clustersecretstore.rc == 0
+          retries: 30
+          delay: 10
+
+        - name: Wait for ClusterSecretStore vault Ready
+          ansible.builtin.command: >-
+            kubectl wait clustersecretstore/vault
+            --for=condition=Ready --timeout=120s
+          register: wait_clustersecretstore_ready
+          until: wait_clustersecretstore_ready.rc == 0
+          retries: 30
+          delay: 10
+          changed_when: false

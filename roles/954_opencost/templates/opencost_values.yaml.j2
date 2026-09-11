@@ -1,0 +1,38 @@
+# HTTPRoute + Envoy OIDC for {{ opencost_host }} is created by 961_apply_oidc_ingress
+# (560 skips oidc_auth). Chart Ingress/HTTPRoute stay off.
+# Queries in-cluster kube-prometheus-stack; no bundled Prometheus, no cloud billing.
+# Chart clusterName is the in-cluster DNS suffix (svc.<clusterName>), not the Atlas
+# leaf FQDN. CoreDNS only serves k8s_dns_domain. CLUSTER_ID stays defaultClusterId.
+clusterName: "{{ k8s_dns_domain }}"
+
+opencost:
+  mcp:
+    enabled: false
+    ingress:
+      enabled: false
+    httpRoute:
+      enabled: false
+  exporter:
+    defaultClusterId: "{{ k8s_cluster_domain }}"
+    apiIngress:
+      enabled: false
+    apiHttpRoute:
+      enabled: false
+  metrics:
+    serviceMonitor:
+      enabled: true
+  prometheus:
+    internal:
+      enabled: true
+      serviceName: prometheus-kube-prometheus-prometheus
+      namespaceName: "{{ monitoring_namespace }}"
+      port: 9090
+    thanos:
+      enabled: false
+  ui:
+    enabled: true
+    useIPv6: false
+    ingress:
+      enabled: false
+    httpRoute:
+      enabled: false

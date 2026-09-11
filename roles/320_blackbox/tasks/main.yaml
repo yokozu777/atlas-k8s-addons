@@ -1,0 +1,46 @@
+    - name: Remove blackbox-exporter Helm chart (absent)
+      when: blackbox_exporter_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: blackbox-exporter
+            namespace: "{{ monitoring_namespace }}"
+        helm_chart_absent_ingress_app_names:
+          - blackbox
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/blackbox-exporter.yaml"
+    - name: Install/configure blackbox_exporter chart
+      when: blackbox_exporter_chart_state | default('present') == 'present'
+      block:
+        - name: Load Internal CA for blackbox-exporter
+          ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/download_internal_ca.yaml"
+
+        - name: Render blackbox-exporter helm values
+          ansible.builtin.template:
+            src: blackbox-exporter.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/blackbox-exporter.yaml"
+            mode: '0644'
+    
+        - name: Read the TLS certificate file for blackbox-exporter
+          ansible.builtin.slurp:
+            src: "{{ k8s_manifests_dir }}/internal-ca.pem"
+          register: public_key_ca_blackbox
+    
+        - name: Create blackbox-exporter ca cert
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: ca-k8s-external
+                namespace: "{{ monitoring_namespace }}"
+              data: "{{ { k8s_ca_cert_filename: public_key_ca_blackbox.content } }}"
+    
+        - name: Helming blackbox-exporter
+          ansible.builtin.command: >-
+            helm upgrade --install {{ item }}
+            --create-namespace
+            {{ blackbox_exporter_chart_version | helm_chart_version_args }}
+          loop:
+            - blackbox-exporter prometheus-community/prometheus-blackbox-exporter --namespace {{ monitoring_namespace }} -f {{ k8s_manifests_dir }}/blackbox-exporter.yaml

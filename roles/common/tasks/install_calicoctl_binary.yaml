@@ -1,0 +1,62 @@
+---
+- name: Check installed calicoctl client version
+  ansible.builtin.command: "{{ install_calicoctl_dest }} version --client"
+  register: install_calicoctl_version_cmd
+  changed_when: false
+  failed_when: false
+
+- name: Resolve calicoctl download URL and controller path
+  ansible.builtin.set_fact:
+    install_calicoctl_url: >-
+      {{
+        (
+          (debug_tooling_binary_infra_base | regex_replace('/+$', ''))
+          ~ '/projectcalico/calico/releases/download/'
+          ~ install_calicoctl_version
+          ~ '/calicoctl-linux-amd64'
+        )
+        if (debug_tooling_binary_source | default('github')) == 'infra'
+        else (
+          'https://github.com/projectcalico/calico/releases/download/'
+          ~ install_calicoctl_version
+          ~ '/calicoctl-linux-amd64'
+        )
+      }}
+    install_calicoctl_controller_path: "{{ controller_staging_dir }}/debug-tooling/calicoctl-linux-amd64-{{ install_calicoctl_version }}"
+
+- name: Ensure controller staging directory for debug tooling binaries
+  ansible.builtin.file:
+    path: "{{ controller_staging_dir }}/debug-tooling"
+    state: directory
+    mode: "0750"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Check calicoctl binary on controller
+  ansible.builtin.stat:
+    path: "{{ install_calicoctl_controller_path }}"
+  register: install_calicoctl_controller_stat
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Download calicoctl binary on controller
+  ansible.builtin.get_url:
+    url: "{{ install_calicoctl_url }}"
+    dest: "{{ install_calicoctl_controller_path }}"
+    mode: "0755"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  environment: "{{ controller_tls_environment | default({}) }}"
+  when: not install_calicoctl_controller_stat.stat.exists
+
+- name: Install calicoctl binary from controller staging
+  ansible.builtin.copy:
+    src: "{{ install_calicoctl_controller_path }}"
+    dest: "{{ install_calicoctl_dest }}"
+    mode: "0755"
+  when: >-
+    install_calicoctl_version_cmd.rc != 0
+    or (install_calicoctl_version | trim) not in (install_calicoctl_version_cmd.stdout | default(''))

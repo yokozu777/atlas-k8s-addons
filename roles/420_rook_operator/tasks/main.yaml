@@ -1,0 +1,158 @@
+    - name: Remove rook-operator Helm chart (absent)
+      when: rook_operator_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: rook-ceph
+            namespace: "{{ rook_operator_namespace }}"
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/rook_operator_values.yaml"
+          - "{{ k8s_manifests_dir }}/.rook-operator-values-checksum"
+    - name: Install/configure rook_operator chart
+      when: rook_operator_chart_state | default('present') == 'present'
+      block:
+        - name: Render rook operator helm values
+          ansible.builtin.template:
+            src: rook_operator_values.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/rook_operator_values.yaml"
+            mode: '0644'
+    
+        - name: Stat rendered rook operator helm values
+          ansible.builtin.stat:
+            path: "{{ k8s_manifests_dir }}/rook_operator_values.yaml"
+            checksum_algorithm: sha1
+          register: rook_operator_values_stat
+    
+        - name: Check if {{ rook_operator_namespace }} Helm release exists
+          ansible.builtin.command: >-
+            helm list -n {{ rook_operator_namespace }} -o json -f ^rook-ceph$
+          environment:
+            KUBECONFIG: "{{ k8s_kubeconfig }}"
+          register: rook_operator_release_json
+          changed_when: false
+          failed_when: false
+    
+        - name: Read rook operator values checksum marker
+          ansible.builtin.slurp:
+            src: "{{ k8s_manifests_dir }}/.rook-operator-values-checksum"
+          register: rook_operator_values_checksum_file
+          failed_when: false
+    
+        - name: Resolve rook operator helm mode
+          ansible.builtin.set_fact:
+            rook_operator_release_exists: >-
+              {{ (rook_operator_release_json.stdout | default('[]') | from_json | length) > 0 }}
+            rook_operator_helm_status: >-
+              {{
+                (rook_operator_release_json.stdout | default('[]') | from_json | first | default({})).status
+                | default('')
+              }}
+            rook_operator_values_changed: >-
+              {{
+                (
+                  rook_operator_values_checksum_file is defined
+                  and rook_operator_values_checksum_file.content is defined
+                  and (rook_operator_values_checksum_file.content | length) > 0
+                  and rook_operator_values_stat.stat.checksum | default('')
+                  != (rook_operator_values_checksum_file.content | b64decode | trim)
+                )
+              }}
+    
+        - name: Resolve rook operator helm actions
+          ansible.builtin.set_fact:
+            rook_operator_needs_initial_install: >-
+              {{ not (rook_operator_release_exists | bool) }}
+            rook_operator_skip_helm: >-
+              {{
+                (rook_operator_release_exists | bool)
+                and (rook_operator_helm_status | trim) == 'deployed'
+                and not (rook_operator_values_changed | bool)
+              }}
+            rook_operator_needs_helm_upgrade: >-
+              {{
+                (rook_operator_release_exists | bool)
+                and not (
+                  (rook_operator_helm_status | trim) == 'deployed'
+                  and not (rook_operator_values_changed | bool)
+                )
+              }}
+    
+        - name: Seed rook operator values checksum marker on existing release
+          ansible.builtin.copy:
+            dest: "{{ k8s_manifests_dir }}/.rook-operator-values-checksum"
+            content: "{{ rook_operator_values_stat.stat.checksum }}\n"
+            mode: '0644'
+          when:
+            - rook_operator_release_exists | bool
+            - rook_operator_values_stat.stat.checksum is defined
+            - not (
+                rook_operator_values_checksum_file is defined
+                and rook_operator_values_checksum_file.content is defined
+                and (rook_operator_values_checksum_file.content | length) > 0
+              )
+    
+        - name: Skip rook operator helm on unchanged release
+          ansible.builtin.debug:
+            msg: "{{ rook_operator_namespace }} operator already deployed; skipping helm upgrade"
+          when: rook_operator_skip_helm | bool
+    
+        - name: Helming rook operator (initial install)
+          ansible.builtin.command: >-
+            helm upgrade --install rook-ceph
+            rook-release/rook-ceph
+            --namespace {{ rook_operator_namespace }}
+            --create-namespace
+            -f {{ k8s_manifests_dir }}/rook_operator_values.yaml
+            {{ rook_operator_chart_version | helm_chart_version_args }}
+          environment: "{{ _helm_kube_env }}"
+          register: rook_operator_helm_initial
+          when: rook_operator_needs_initial_install | bool
+          changed_when: rook_operator_helm_initial.rc == 0
+    
+        - name: Helming rook operator (upgrade with values sync)
+          ansible.builtin.command: >-
+            helm upgrade --install rook-ceph
+            rook-release/rook-ceph
+            --namespace {{ rook_operator_namespace }}
+            --create-namespace
+            -f {{ k8s_manifests_dir }}/rook_operator_values.yaml
+            --reuse-values
+            --force-conflicts
+            {{ rook_operator_chart_version | helm_chart_version_args }}
+          environment: "{{ _helm_kube_env }}"
+          register: rook_operator_helm_values_sync
+          when:
+            - rook_operator_needs_helm_upgrade | bool
+            - not (rook_operator_needs_initial_install | bool)
+            - rook_operator_values_changed | bool
+          changed_when: rook_operator_helm_values_sync.rc == 0
+    
+        - name: Helming rook operator (heal or chart upgrade)
+          ansible.builtin.command: >-
+            helm upgrade --install rook-ceph
+            rook-release/rook-ceph
+            --namespace {{ rook_operator_namespace }}
+            --create-namespace
+            --reuse-values
+            --force-conflicts
+            {{ rook_operator_chart_version | helm_chart_version_args }}
+          environment: "{{ _helm_kube_env }}"
+          register: rook_operator_helm_upgrade
+          when:
+            - rook_operator_needs_helm_upgrade | bool
+            - not (rook_operator_needs_initial_install | bool)
+            - not (rook_operator_values_changed | bool)
+          changed_when: rook_operator_helm_upgrade.rc == 0
+    
+        - name: Record applied rook operator values checksum
+          ansible.builtin.copy:
+            dest: "{{ k8s_manifests_dir }}/.rook-operator-values-checksum"
+            content: "{{ rook_operator_values_stat.stat.checksum }}\n"
+            mode: '0644'
+          when:
+            - rook_operator_values_stat.stat.checksum is defined
+            - >-
+              (rook_operator_helm_initial is defined and rook_operator_helm_initial.rc | default(1) == 0)
+              or (rook_operator_helm_values_sync is defined and rook_operator_helm_values_sync.rc | default(1) == 0)
+              or (rook_operator_helm_upgrade is defined and rook_operator_helm_upgrade.rc | default(1) == 0)
+              or (rook_operator_skip_helm | default(false) | bool)

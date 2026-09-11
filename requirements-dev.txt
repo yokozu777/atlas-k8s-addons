@@ -1,0 +1,2 @@
+# Dev / CI tools (optional). Runtime collections: requirements.yml
+ansible-lint>=25.0.0

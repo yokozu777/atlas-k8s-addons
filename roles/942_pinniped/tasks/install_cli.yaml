@@ -1,0 +1,73 @@
+---
+- name: Check installed pinniped CLI version
+  ansible.builtin.command: "{{ controller_bin_dir }}/pinniped version"
+  register: pinniped_cli_version_cmd
+  changed_when: false
+  failed_when: false
+
+- name: Resolve pinniped CLI download URL and staging path
+  ansible.builtin.set_fact:
+    pinniped_cli_url: >-
+      {{
+        (
+          (debug_tooling_binary_infra_base | default('') | regex_replace('/+$', ''))
+          ~ '/vmware/pinniped/releases/download/'
+          ~ pinniped_version
+          ~ '/pinniped-cli-linux-amd64'
+        )
+        if (debug_tooling_binary_source | default('github')) == 'infra'
+        else (
+          'https://github.com/vmware/pinniped/releases/download/'
+          ~ pinniped_version
+          ~ '/pinniped-cli-linux-amd64'
+        )
+      }}
+    pinniped_cli_staging_path: "{{ controller_staging_dir }}/debug-tooling/pinniped-cli-linux-amd64-{{ pinniped_version }}"
+
+- name: Ensure controller staging directory for pinniped CLI
+  ansible.builtin.file:
+    path: "{{ controller_staging_dir }}/debug-tooling"
+    state: directory
+    mode: "0750"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Ensure controller bin directory for pinniped CLI
+  ansible.builtin.file:
+    path: "{{ controller_bin_dir }}"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Check pinniped CLI binary in staging
+  ansible.builtin.stat:
+    path: "{{ pinniped_cli_staging_path }}"
+  register: pinniped_cli_staging_stat
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Download pinniped CLI on controller
+  ansible.builtin.get_url:
+    url: "{{ pinniped_cli_url }}"
+    dest: "{{ pinniped_cli_staging_path }}"
+    mode: "0755"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  environment: "{{ controller_tls_environment | default({}) }}"
+  when: not pinniped_cli_staging_stat.stat.exists
+
+- name: Install pinniped CLI into controller bin dir
+  ansible.builtin.copy:
+    src: "{{ pinniped_cli_staging_path }}"
+    dest: "{{ controller_bin_dir }}/pinniped"
+    mode: "0755"
+  delegate_to: localhost
+  become: false
+  when: >-
+    pinniped_cli_version_cmd.rc != 0
+    or (pinniped_version | trim) not in (pinniped_cli_version_cmd.stdout | default(''))

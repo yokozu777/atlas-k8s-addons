@@ -1,0 +1,35 @@
+    - name: Remove external-dns-istio Helm chart (absent)
+      when: external_dns_istio_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: external-dns-istio
+            namespace: "{{ istio_namespace }}"
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/external-dns-istio.yaml"
+    - name: Install/configure external_dns_istio chart
+      when: external_dns_istio_chart_state | default('present') == 'present'
+      block:
+        - name: Render external-dns-istio helm values
+          ansible.builtin.template:
+            src: external-dns-istio.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/external-dns-istio.yaml"
+            mode: '0644'
+    
+        - name: Helming external-dns-istio
+          ansible.builtin.command: >-
+            helm upgrade --install {{ item }}
+            --create-namespace
+            {{ external_dns_istio_chart_version | helm_chart_version_args }}
+          loop:
+            - external-dns-istio external-dns/external-dns -f {{ k8s_manifests_dir }}/external-dns-istio.yaml --namespace {{ istio_namespace }}
+
+        - name: Render external-dns-istio ServiceMonitor
+          ansible.builtin.template:
+            src: external-dns-servicemonitor.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/external-dns-istio-servicemonitor.yaml"
+            mode: '0644'
+
+        - name: Apply external-dns-istio ServiceMonitor
+          ansible.builtin.command: >-
+            kubectl --validate=false apply -f {{ k8s_manifests_dir }}/external-dns-istio-servicemonitor.yaml

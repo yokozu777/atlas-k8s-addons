@@ -1,0 +1,17 @@
+{{- $src := .Files.Get "files/upstream/concierge-resources.yaml" -}}
+{{- if not $src -}}
+{{- fail "missing files/upstream/concierge-resources.yaml" -}}
+{{- end -}}
+{{- $nsDoc := "---\napiVersion: v1\nkind: Namespace\nmetadata:\n  name: pinniped-concierge\n  labels:\n    app: pinniped-concierge\n    pod-security.kubernetes.io/enforce: privileged\n---\n" -}}
+{{- if not (contains $nsDoc $src) -}}
+{{- fail "expected Namespace pinniped-concierge in upstream concierge YAML" -}}
+{{- end -}}
+{{- $src = $src | replace $nsDoc "" -}}
+{{- if not (contains "namespace: pinniped-concierge" $src) -}}
+{{- fail "expected namespace: pinniped-concierge in upstream concierge YAML" -}}
+{{- end -}}
+{{- $src = $src | replace "namespace: pinniped-concierge" (printf "namespace: %s" .Values.pinnipedNamespace) -}}
+{{- if not (contains "    mode: auto" $src) -}}
+{{- fail "expected impersonationProxy mode: auto in upstream concierge YAML" -}}
+{{- end -}}
+{{ $src | replace "    mode: auto" "    mode: disabled" }}

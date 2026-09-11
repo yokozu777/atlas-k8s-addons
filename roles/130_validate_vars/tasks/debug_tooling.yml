@@ -1,0 +1,16 @@
+---
+- name: Assert debug_tooling_binary_source is valid
+  ansible.builtin.assert:
+    that:
+      - debug_tooling_binary_source | default('github') in ['github', 'infra']
+    fail_msg: >-
+      debug_tooling_binary_source must be github or infra
+      (got {{ debug_tooling_binary_source | default('github') }})
+
+- name: Assert debug_tooling_binary_infra_base when source is infra
+  when: (debug_tooling_binary_source | default('github')) == 'infra'
+  ansible.builtin.assert:
+    that:
+      - debug_tooling_binary_infra_base | default('') | trim | length > 0
+    fail_msg: >-
+      debug_tooling_binary_infra_base is required when debug_tooling_binary_source=infra

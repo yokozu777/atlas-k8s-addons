@@ -1,0 +1,41 @@
+    - name: Remove {{ headlamp_namespace }} Helm chart (absent)
+      when: headlamp_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: headlamp
+            namespace: "{{ headlamp_namespace }}"
+        helm_chart_absent_ingress_app_names:
+          - headlamp
+        helm_chart_absent_delete_namespace: true
+        helm_chart_absent_namespaces:
+          - "{{ headlamp_namespace }}"
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/headlamp_values.yaml"
+          - "{{ k8s_manifests_dir }}/headlamp-servicemonitor.yaml"
+
+    - name: Install/configure headlamp chart
+      when: headlamp_chart_state | default('present') == 'present'
+      block:
+        - name: Render headlamp helm values
+          ansible.builtin.template:
+            src: headlamp_values.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/headlamp_values.yaml"
+            mode: '0644'
+
+        - name: Helming {{ headlamp_namespace }}
+          ansible.builtin.command: >-
+            helm upgrade --install headlamp headlamp/headlamp
+            --namespace {{ headlamp_namespace }} --create-namespace
+            -f {{ k8s_manifests_dir }}/headlamp_values.yaml
+            {{ headlamp_chart_version | helm_chart_version_args }}
+
+        - name: Render headlamp ServiceMonitor
+          ansible.builtin.template:
+            src: headlamp-servicemonitor.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/headlamp-servicemonitor.yaml"
+            mode: '0644'
+
+        - name: Apply headlamp ServiceMonitor
+          ansible.builtin.command: >-
+            kubectl --validate=false apply -f {{ k8s_manifests_dir }}/headlamp-servicemonitor.yaml

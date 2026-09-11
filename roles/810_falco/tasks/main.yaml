@@ -1,0 +1,41 @@
+    - name: Remove {{ falco_namespace }} Helm chart (absent)
+      when: falco_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: falco
+            namespace: "{{ falco_namespace }}"
+        helm_chart_absent_delete_namespace: true
+        helm_chart_absent_namespaces:
+          - "{{ falco_namespace }}"
+        helm_chart_absent_ingress_app_names:
+          - falco
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/falco_values.yaml"
+
+    - name: Install/configure {{ falco_namespace }} chart
+      when: falco_chart_state | default('present') == 'present'
+      block:
+        - name: Render falco helm values
+          ansible.builtin.template:
+            src: falco_values.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/falco_values.yaml"
+            mode: '0644'
+
+        - name: Helming {{ falco_namespace }}
+          ansible.builtin.command: >-
+            helm upgrade --install falco falcosecurity/falco
+            --namespace {{ falco_namespace }} --create-namespace
+            -f {{ k8s_manifests_dir }}/falco_values.yaml
+            {{ falco_chart_version | helm_chart_version_args }}
+          changed_when: true
+
+        - name: Render Falco ServiceMonitors
+          ansible.builtin.template:
+            src: falco-servicemonitor.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/falco-servicemonitor.yaml"
+            mode: '0644'
+
+        - name: Apply Falco ServiceMonitors
+          ansible.builtin.command: >-
+            kubectl --validate=false apply -f {{ k8s_manifests_dir }}/falco-servicemonitor.yaml

@@ -1,0 +1,32 @@
+---
+- name: Resolve debug tooling target hosts
+  ansible.builtin.set_fact:
+    debug_tooling_helm_target_hosts: "{{ debug_tooling_helm_hosts | expand_debug_tooling_hosts(groups) }}"
+    debug_tooling_calicoctl_target_hosts: "{{ debug_tooling_calicoctl_hosts | expand_debug_tooling_hosts(groups) }}"
+    debug_tooling_istioctl_target_hosts: "{{ debug_tooling_istioctl_hosts | expand_debug_tooling_hosts(groups) }}"
+    debug_tooling_etcdctl_target_hosts: "{{ debug_tooling_etcdctl_hosts | expand_debug_tooling_hosts(groups) }}"
+    debug_tooling_kubeconfig_target_hosts: >-
+      {{
+        (debug_tooling_install_kubeconfig | expand_debug_tooling_hosts(groups))
+        if (debug_tooling_install_kubeconfig | default('') | length > 0)
+        else []
+      }}
+  run_once: true
+
+- name: Assert etcdctl targets are control-plane nodes only
+  ansible.builtin.assert:
+    that:
+      - debug_tooling_etcdctl_target_hosts | difference(groups.get(k8s_master_hosts, [])) | length == 0
+    fail_msg: >-
+      debug_tooling_etcdctl_hosts must resolve to {{ k8s_master_hosts }} only
+      (got {{ debug_tooling_etcdctl_target_hosts | difference(groups.get(k8s_master_hosts, [])) | join(', ') }}).
+  when: debug_tooling_etcdctl_enabled | default(true) | bool
+  run_once: true
+
+- name: Share resolved debug tooling target hosts with play hosts
+  ansible.builtin.set_fact:
+    debug_tooling_helm_target_hosts: "{{ hostvars[ansible_play_hosts[0]].debug_tooling_helm_target_hosts | default([]) }}"
+    debug_tooling_calicoctl_target_hosts: "{{ hostvars[ansible_play_hosts[0]].debug_tooling_calicoctl_target_hosts | default([]) }}"
+    debug_tooling_istioctl_target_hosts: "{{ hostvars[ansible_play_hosts[0]].debug_tooling_istioctl_target_hosts | default([]) }}"
+    debug_tooling_etcdctl_target_hosts: "{{ hostvars[ansible_play_hosts[0]].debug_tooling_etcdctl_target_hosts | default([]) }}"
+    debug_tooling_kubeconfig_target_hosts: "{{ hostvars[ansible_play_hosts[0]].debug_tooling_kubeconfig_target_hosts | default([]) }}"

@@ -1,0 +1,213 @@
+# Grafana dashboards for kube-prometheus-stack grafana.dashboards.cluster-addons.
+# Helm downloads url/gnetId at 310_prometheus apply (controller needs egress).
+# Gate on *_chart_state so absent charts do not provision empty dashboards.
+# List-form datasource: Helm sed replaces ${DS_PROMETHEUS}/${DS_PROMXY}/${datasource}
+# /${DS_SIGNCL-PROMETHEUS} with Grafana DS uid (prometheus), not the display name.
+# Does not slice JSON objects. Thanos stays a second DS; panels use Prometheus.
+# url origin: grafana_raw_prefix(entity) — github (raw.githubusercontent.com) or infra.
+# grafana-native: grafana_gnet — gnetId (grafana.com) or url via grafana_dashboard_infra_base.
+{% macro grafana_prometheus_ds() %}
+        datasource:
+          - name: DS_PROMETHEUS
+            value: prometheus
+          - name: DS_PROMXY
+            value: prometheus
+          - name: datasource
+            value: prometheus
+          - name: DS_SIGNCL-PROMETHEUS
+            value: prometheus
+{% endmacro %}
+{% macro grafana_raw_prefix(entity) -%}
+{%- set src = (grafana_dashboard_source | default({}))[entity] | default('github') -%}
+{%- if src == 'infra' -%}
+{{ grafana_dashboard_infra_base | default('') | regex_replace('/+$', '') }}
+{%- else -%}
+https://raw.githubusercontent.com
+{%- endif -%}
+{%- endmacro %}
+{% macro grafana_gnet(entity, gnet_id, revision, emit_revision=true) -%}
+{%- set src = (grafana_dashboard_source | default({}))[entity] | default('grafana') -%}
+{%- if src == 'infra' %}
+        url: {{ grafana_dashboard_infra_base | default('') | regex_replace('/+$', '') }}/api/dashboards/{{ gnet_id }}/revisions/{{ revision }}/download
+{%- else %}
+        gnetId: {{ gnet_id }}
+{%- if emit_revision %}
+        revision: {{ revision }}
+{%- endif %}
+{%- endif %}
+{%- endmacro %}
+{% if calico_chart_state | default('present') == 'present' %}
+      kubernetes-calico:
+{{ grafana_gnet('calico', 3244, 1) }}
+{{ grafana_prometheus_ds() }}
+      calico-felix:
+{{ grafana_gnet('calico', 12175, 7) }}
+{{ grafana_prometheus_ds() }}
+      # Typha: not on grafana.com. Official JSON is projectcalico/calico
+      # manifests/grafana-dashboards.yaml key typha-dashboard.json
+      # ({{ calico_chart_version }}), extracted at 310_prometheus apply.
+      # Origin follows grafana_dashboard_source.calico_typha (github|infra).
+      # Do not import felix-dashboard.json from that ConfigMap (same uid as gnet 12175).
+{% endif %}
+{% if metallb_chart_state | default('present') == 'present' %}
+      metallb:
+{{ grafana_gnet('metallb', 20162, 6) }}
+{{ grafana_prometheus_ds() }}
+{% endif %}
+{% if vault_chart_state | default('present') == 'present' %}
+      vault:
+{{ grafana_gnet('vault', 12904, 2) }}
+{{ grafana_prometheus_ds() }}
+{% endif %}
+{% if fluentbit_chart_state | default('present') == 'present' %}
+      fluentbit:
+{{ grafana_gnet('fluentbit', 18855, 1) }}
+{{ grafana_prometheus_ds() }}
+{% endif %}
+{% if cert_manager_chart_state | default('present') == 'present' %}
+      cert-manager:
+{{ grafana_gnet('cert_manager', 20340, 1, emit_revision=false) }}
+{{ grafana_prometheus_ds() }}
+{% endif %}
+{% if istio_chart_state | default('present') == 'present' %}
+      istio-control-plane:
+        url: {{ grafana_raw_prefix('istio') }}/istio/istio/{{ istio_chart_version }}/manifests/addons/dashboards/pilot-dashboard.gen.json
+{{ grafana_prometheus_ds() }}
+      istio-mesh:
+        url: {{ grafana_raw_prefix('istio') }}/istio/istio/{{ istio_chart_version }}/manifests/addons/dashboards/istio-mesh-dashboard.gen.json
+{{ grafana_prometheus_ds() }}
+      istio-service:
+        url: {{ grafana_raw_prefix('istio') }}/istio/istio/{{ istio_chart_version }}/manifests/addons/dashboards/istio-service-dashboard.json
+{{ grafana_prometheus_ds() }}
+      istio-workload:
+        url: {{ grafana_raw_prefix('istio') }}/istio/istio/{{ istio_chart_version }}/manifests/addons/dashboards/istio-workload-dashboard.json
+{{ grafana_prometheus_ds() }}
+{% endif %}
+{% if rook_cluster_chart_state | default('present') == 'present' %}
+      ceph-osd:
+        url: {{ grafana_raw_prefix('ceph') }}/ceph/ceph/main/monitoring/ceph-mixin/dashboards_out/osds-overview.json
+{{ grafana_prometheus_ds() }}
+      ceph-cluster:
+        url: {{ grafana_raw_prefix('ceph') }}/ceph/ceph/main/monitoring/ceph-mixin/dashboards_out/ceph-cluster.json
+{{ grafana_prometheus_ds() }}
+      ceph-pool-overview:
+        url: {{ grafana_raw_prefix('ceph') }}/ceph/ceph/main/monitoring/ceph-mixin/dashboards_out/pool-overview.json
+{{ grafana_prometheus_ds() }}
+      ceph-hosts-overview:
+        url: {{ grafana_raw_prefix('ceph') }}/ceph/ceph/main/monitoring/ceph-mixin/dashboards_out/hosts-overview.json
+{{ grafana_prometheus_ds() }}
+{% endif %}
+{% if envoy_gateway_chart_state | default('present') == 'present' %}
+      envoy-proxy-global:
+        url: {{ grafana_raw_prefix('envoy') }}/envoyproxy/gateway/v1.8.3/charts/gateway-addons-helm/dashboards/envoy-proxy-global.json
+{{ grafana_prometheus_ds() }}
+      envoy-clusters:
+        url: {{ grafana_raw_prefix('envoy') }}/envoyproxy/gateway/v1.8.3/charts/gateway-addons-helm/dashboards/envoy-clusters.json
+{{ grafana_prometheus_ds() }}
+      envoy-gateway-global:
+        url: {{ grafana_raw_prefix('envoy') }}/envoyproxy/gateway/v1.8.3/charts/gateway-addons-helm/dashboards/envoy-gateway-global.json
+{{ grafana_prometheus_ds() }}
+{% endif %}
+{% if elasticsearch_chart_state | default('present') == 'present' %}
+      elasticsearch-exporter:
+{{ grafana_gnet('elasticsearch', 14191, 1) }}
+{{ grafana_prometheus_ds() }}
+{% endif %}
+{% if cnpg_chart_state | default('present') == 'present' %}
+      cnpg-cluster:
+        url: {{ grafana_raw_prefix('cnpg') }}/cloudnative-pg/grafana-dashboards/main/charts/cluster/grafana-dashboard.json
+{{ grafana_prometheus_ds() }}
+{% endif %}
+{% if blackbox_exporter_chart_state | default('present') == 'present' %}
+      blackbox-exporter:
+{{ grafana_gnet('blackbox', 7587, 3) }}
+{{ grafana_prometheus_ds() }}
+{% endif %}
+{% if thanos_chart_state | default('present') == 'present' %}
+      thanos-query:
+        url: {{ grafana_raw_prefix('thanos') }}/thanos-io/thanos/main/examples/dashboards/query.json
+{{ grafana_prometheus_ds() }}
+      thanos-compact:
+        url: {{ grafana_raw_prefix('thanos') }}/thanos-io/thanos/main/examples/dashboards/compact.json
+{{ grafana_prometheus_ds() }}
+      thanos-store:
+        url: {{ grafana_raw_prefix('thanos') }}/thanos-io/thanos/main/examples/dashboards/store.json
+{{ grafana_prometheus_ds() }}
+      thanos-receive:
+        url: {{ grafana_raw_prefix('thanos') }}/thanos-io/thanos/main/examples/dashboards/receive.json
+{{ grafana_prometheus_ds() }}
+{% endif %}
+{% if consul_chart_state | default('present') == 'present' %}
+      consul:
+{{ grafana_gnet('consul', 13396, 3) }}
+{{ grafana_prometheus_ds() }}
+{% endif %}
+{% if falco_chart_state | default('present') == 'present' %}
+      falco:
+        url: {{ grafana_raw_prefix('falco') }}/falcosecurity/charts/master/charts/falco/dashboards/falco-dashboard.json
+{{ grafana_prometheus_ds() }}
+      falcosidekick:
+        url: {{ grafana_raw_prefix('falco') }}/falcosecurity/charts/master/charts/falcosidekick/dashboards/falcosidekick-grafana-dashboard.json
+{{ grafana_prometheus_ds() }}
+{% endif %}
+{% if trivy_chart_state | default('present') == 'present' %}
+      trivy-operator:
+{{ grafana_gnet('trivy', 17813, 2) }}
+{{ grafana_prometheus_ds() }}
+      # dotdc/grafana-dashboards-kubernetes (grafana.com/grafana/dashboards/16337)
+      trivy-operator-vulnerabilities:
+{{ grafana_gnet('trivy', 16337, 16) }}
+{{ grafana_prometheus_ds() }}
+{% endif %}
+{% if opencost_chart_state | default('present') == 'present' %}
+      opencost-overview:
+{{ grafana_gnet('opencost', 22208, 7) }}
+{{ grafana_prometheus_ds() }}
+{% endif %}
+{% if keycloak_chart_state | default('present') == 'present' %}
+      keycloak-troubleshooting:
+        url: {{ grafana_raw_prefix('keycloak') }}/keycloak/keycloak-grafana-dashboard/main/dashboards/keycloak-troubleshooting-dashboard.json
+{{ grafana_prometheus_ds() }}
+{% endif %}
+{% if external_dns_chart_state | default('present') == 'present' %}
+      external-dns:
+{{ grafana_gnet('external_dns', 15038, 3) }}
+{{ grafana_prometheus_ds() }}
+{% endif %}
+{% if argocd_chart_state | default('present') == 'present' %}
+      argocd:
+        url: {{ grafana_raw_prefix('argocd') }}/argoproj/argo-cd/master/examples/dashboard.json
+{{ grafana_prometheus_ds() }}
+{% endif %}
+{% if argo_rollouts_chart_state | default('present') == 'present' %}
+      argo-rollouts:
+        url: {{ grafana_raw_prefix('argo_rollouts') }}/argoproj/argo-rollouts/master/examples/dashboard.json
+{{ grafana_prometheus_ds() }}
+{% endif %}
+{% if oauth2_proxy_chart_state | default('present') == 'present' %}
+      # oauth2-proxy: no official Grafana JSON in gnet or oauth2-proxy/contrib; scrape via ServiceMonitor.
+{% endif %}
+{% if kiali_chart_state | default('present') == 'present' %}
+      # kiali: no official Grafana JSON for kiali_*; Kiali CR links Istio dashboards (740_kiali).
+{% endif %}
+{% if external_secrets_chart_state | default('present') == 'present' %}
+      external-secrets:
+        url: {{ grafana_raw_prefix('external_secrets') }}/external-secrets/external-secrets/main/docs/snippets/dashboard.json
+{{ grafana_prometheus_ds() }}
+{% endif %}
+{% if chaos_mesh_chart_state | default('present') == 'present' %}
+      # chaos-mesh repo has no Grafana JSON; gnet 15918 is the maintainer hub dashboard.
+      chaos-mesh:
+{{ grafana_gnet('chaos_mesh', 15918, 1) }}
+{{ grafana_prometheus_ds() }}
+{% endif %}
+{% if jaeger_chart_state | default('present') == 'present' %}
+      jaeger:
+        url: {{ grafana_raw_prefix('jaeger') }}/jaegertracing/jaeger/main/monitoring/jaeger-mixin/dashboard-for-grafana.json
+{{ grafana_prometheus_ds() }}
+{% endif %}
+{% if opentelemetry_collector_chart_state | default('present') == 'present' %}
+      opentelemetry-collector:
+{{ grafana_gnet('opentelemetry', 15983, 30) }}
+{{ grafana_prometheus_ds() }}
+{% endif %}

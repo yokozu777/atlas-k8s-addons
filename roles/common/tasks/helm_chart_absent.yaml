@@ -1,0 +1,344 @@
+---
+- name: Probe Helm releases for absent fast-path
+  ansible.builtin.command:
+    argv:
+      - helm
+      - status
+      - "{{ item.name }}"
+      - -n
+      - "{{ item.namespace }}"
+  environment:
+    KUBECONFIG: "{{ k8s_kubeconfig }}"
+  loop: "{{ helm_chart_absent_releases }}"
+  register: helm_chart_absent_status
+  failed_when: false
+  changed_when: false
+
+- name: Probe namespaces for absent fast-path
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - get
+      - namespace
+      - "{{ item }}"
+  environment:
+    KUBECONFIG: "{{ k8s_kubeconfig }}"
+  loop: "{{ helm_chart_absent_namespaces | default([]) }}"
+  register: helm_chart_absent_ns
+  failed_when: false
+  changed_when: false
+  when: helm_chart_absent_namespaces | default([]) | length > 0
+
+- name: Remember whether cluster teardown can be skipped
+  ansible.builtin.set_fact:
+    helm_chart_absent_skip_cluster: >-
+      {{
+        (
+          helm_chart_absent_status.results | default([])
+          | rejectattr('rc', 'defined')
+          | list | length == 0
+        )
+        and
+        (
+          helm_chart_absent_status.results | default([])
+          | selectattr('rc', 'defined')
+          | selectattr('rc', 'ne', 0)
+          | list | length
+        ) == (helm_chart_absent_releases | default([]) | length)
+        and
+        (helm_chart_absent_namespaces | default([]) | length > 0)
+        and
+        (
+          helm_chart_absent_ns.results | default([])
+          | selectattr('rc', 'defined')
+          | selectattr('rc', 'ne', 0)
+          | list | length
+        ) == (helm_chart_absent_namespaces | default([]) | length)
+      }}
+
+- name: Teardown Helm chart from the cluster
+  when: not (helm_chart_absent_skip_cluster | bool)
+  block:
+    - name: Uninstall Helm releases ({{ helm_chart_absent_releases | map(attribute='name') | join(', ') }})
+      ansible.builtin.command: >-
+        helm uninstall {{ item.name }}
+        -n {{ item.namespace }}
+        --wait --timeout 10m --ignore-not-found
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      loop: "{{ helm_chart_absent_releases }}"
+      register: helm_chart_absent_uninstall
+      changed_when: helm_chart_absent_uninstall.rc == 0
+
+    - name: Delete leftover hook and batch jobs for Helm release
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rel='{{ item.name }}'
+        ns='{{ item.namespace }}'
+        kubectl delete job -n "$ns" -l app.kubernetes.io/instance="$rel" --ignore-not-found --wait=false
+        kubectl delete job -n "$ns" -l release="$rel" --ignore-not-found --wait=false
+        while read -r job; do
+          [ -z "$job" ] && continue
+          kubectl delete job -n "$ns" "$job" --ignore-not-found --wait=false
+        done < <(kubectl get job -n "$ns" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -E "^${rel}(-|$)|${rel}" || true)
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      loop: "{{ helm_chart_absent_releases }}"
+      changed_when: false
+
+    - name: Delete leftover workloads for Helm release
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rel='{{ item.name }}'
+        ns='{{ item.namespace }}'
+        for kind in statefulset deployment daemonset replicaset; do
+          kubectl delete "$kind" -n "$ns" -l app.kubernetes.io/instance="$rel" --ignore-not-found --wait=false
+          kubectl delete "$kind" -n "$ns" -l release="$rel" --ignore-not-found --wait=false
+          kubectl delete "$kind" -n "$ns" -l app.kubernetes.io/name="$rel" --ignore-not-found --wait=false
+        done
+        kubectl delete pods -n "$ns" -l app.kubernetes.io/instance="$rel" --ignore-not-found --wait=false
+        kubectl delete pods -n "$ns" -l release="$rel" --ignore-not-found --wait=false
+        kubectl delete service -n "$ns" -l app.kubernetes.io/instance="$rel" --ignore-not-found --wait=false
+        kubectl delete service -n "$ns" -l release="$rel" --ignore-not-found --wait=false
+        kubectl delete servicemonitor,podmonitor,prometheusrule -n "$ns" -l app.kubernetes.io/instance="$rel" --ignore-not-found --wait=false
+        kubectl delete servicemonitor,podmonitor,prometheusrule -n "$ns" -l release="$rel" --ignore-not-found --wait=false
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      loop: "{{ helm_chart_absent_releases }}"
+      changed_when: false
+
+    - name: Delete PVCs for Helm release
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rel='{{ item.name }}'
+        ns='{{ item.namespace }}'
+        kubectl delete pvc -n "$ns" -l app.kubernetes.io/instance="$rel" --ignore-not-found --wait=false
+        kubectl delete pvc -n "$ns" -l release="$rel" --ignore-not-found --wait=false
+        while read -r pvc; do
+          [ -z "$pvc" ] && continue
+          name="${pvc#persistentvolumeclaim/}"
+          case "$name" in
+            *"$rel"*) kubectl delete pvc -n "$ns" "$name" --ignore-not-found --wait=false ;;
+          esac
+        done < <(kubectl get pvc -n "$ns" -o name 2>/dev/null || true)
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      loop: "{{ helm_chart_absent_releases }}"
+      changed_when: false
+
+    - name: Delete secrets and configmaps for Helm release
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rel='{{ item.name }}'
+        ns='{{ item.namespace }}'
+        kubectl delete secret,configmap -n "$ns" -l app.kubernetes.io/instance="$rel" --ignore-not-found --wait=false
+        kubectl delete secret,configmap -n "$ns" -l release="$rel" --ignore-not-found --wait=false
+        while read -r secret; do
+          [ -z "$secret" ] && continue
+          kubectl delete -n "$ns" "$secret" --ignore-not-found --wait=false
+        done < <(kubectl get secret -n "$ns" -o name 2>/dev/null | grep "sh.helm.release.v1.${rel}." || true)
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      loop: "{{ helm_chart_absent_releases }}"
+      changed_when: false
+
+    - name: Delete extra namespaced Kubernetes resources
+      kubernetes.core.k8s:
+        state: absent
+        api_version: "{{ item.api_version }}"
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+        namespace: "{{ item.namespace }}"
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      loop: "{{ helm_chart_absent_extra_resources | default([]) }}"
+      when: helm_chart_absent_extra_resources | default([]) | length > 0
+
+    - name: Delete extra workloads by label selector
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ns='{{ item.namespace }}'
+        selector='{{ item.selector }}'
+        for kind in statefulset deployment daemonset job pod service configmap secret; do
+          kubectl delete "$kind" -n "$ns" -l "$selector" --ignore-not-found --wait=false
+        done
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      loop: "{{ helm_chart_absent_extra_label_selectors | default([]) }}"
+      when: helm_chart_absent_extra_label_selectors | default([]) | length > 0
+      changed_when: false
+
+    - name: Delete cluster-scoped resources for Helm release
+      kubernetes.core.k8s:
+        state: absent
+        api_version: "{{ item.api_version }}"
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      loop: "{{ helm_chart_absent_cluster_resources | default([]) }}"
+      when: helm_chart_absent_cluster_resources | default([]) | length > 0
+
+    - name: Delete CRDs for Helm release
+      ansible.builtin.shell: |
+        set -euo pipefail
+        kubectl get crd -o name | grep -E '{{ helm_chart_absent_crd_patterns | join("|") }}' | xargs -r kubectl delete --ignore-not-found --wait=false
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      when: helm_chart_absent_crd_patterns | default([]) | length > 0
+      changed_when: false
+
+    - name: Resolve ingress resources to remove
+      ansible.builtin.set_fact:
+        helm_chart_absent_ingress_targets: >-
+          {{
+            k8s_ingress_apps | default([])
+            | selectattr('name', 'in', helm_chart_absent_ingress_app_names | default([]))
+            | list
+          }}
+      when: helm_chart_absent_ingress_app_names | default([]) | length > 0
+
+    - name: Remove HTTPRoute resources for chart
+      kubernetes.core.k8s:
+        state: absent
+        api_version: gateway.networking.k8s.io/v1
+        kind: HTTPRoute
+        name: "{{ item.name }}"
+        namespace: "{{ item.namespace }}"
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      loop: "{{ helm_chart_absent_ingress_targets | default([]) }}"
+      when:
+        - helm_chart_absent_ingress_app_names | default([]) | length > 0
+        - helm_chart_absent_ingress_targets | default([]) | length > 0
+
+    - name: Remove SecurityPolicy resources for chart routes
+      kubernetes.core.k8s:
+        state: absent
+        api_version: gateway.envoyproxy.io/v1alpha1
+        kind: SecurityPolicy
+        name: "{{ item.name }}-oidc"
+        namespace: "{{ item.namespace }}"
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      loop: "{{ helm_chart_absent_ingress_targets | default([]) }}"
+      when:
+        - helm_chart_absent_ingress_app_names | default([]) | length > 0
+        - helm_chart_absent_ingress_targets | default([]) | length > 0
+        - item.oidc_auth | default(false) | bool
+
+    - name: Remove BackendTLSPolicy resources for chart routes
+      kubernetes.core.k8s:
+        state: absent
+        api_version: gateway.networking.k8s.io/v1alpha3
+        kind: BackendTLSPolicy
+        name: "{{ item.name }}-backend-tls"
+        namespace: "{{ item.namespace }}"
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      loop: "{{ helm_chart_absent_ingress_targets | default([]) }}"
+      when:
+        - helm_chart_absent_ingress_app_names | default([]) | length > 0
+        - helm_chart_absent_ingress_targets | default([]) | length > 0
+        - item.backend_tls | default(false) | bool
+
+    - name: Remove OIDC client secrets for chart routes
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "{{ item.name }}-oidc"
+        namespace: "{{ item.namespace }}"
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      loop: "{{ helm_chart_absent_ingress_targets | default([]) }}"
+      when:
+        - helm_chart_absent_ingress_app_names | default([]) | length > 0
+        - helm_chart_absent_ingress_targets | default([]) | length > 0
+        - item.oidc_auth | default(false) | bool
+
+    - name: Remove TLSRoute resources for chart
+      kubernetes.core.k8s:
+        state: absent
+        api_version: gateway.networking.k8s.io/v1alpha2
+        kind: TLSRoute
+        name: "{{ item.name }}"
+        namespace: "{{ item.namespace }}"
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      loop: "{{ helm_chart_absent_ingress_targets | default([]) }}"
+      when:
+        - helm_chart_absent_ingress_app_names | default([]) | length > 0
+        - helm_chart_absent_ingress_targets | default([]) | length > 0
+
+    - name: Remove Backend resources for chart routes
+      kubernetes.core.k8s:
+        state: absent
+        api_version: gateway.envoyproxy.io/v1alpha1
+        kind: Backend
+        name: "{{ item.name }}"
+        namespace: "{{ item.namespace }}"
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      loop: "{{ helm_chart_absent_ingress_targets | default([]) }}"
+      when:
+        - helm_chart_absent_ingress_app_names | default([]) | length > 0
+        - helm_chart_absent_ingress_targets | default([]) | length > 0
+        - item.profile | default('') == 'rook'
+
+    - name: Delete extra Kubernetes manifests applied outside Helm
+      ansible.builtin.command: >-
+        kubectl delete -f {{ item }} --ignore-not-found --wait=false
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      loop: "{{ helm_chart_absent_extra_manifests | default([]) }}"
+      when: helm_chart_absent_extra_manifests | default([]) | length > 0
+      changed_when: false
+      failed_when: false
+
+    - name: List Helm releases remaining in target namespaces
+      ansible.builtin.command: "helm list -n {{ item }} -q"
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      loop: "{{ helm_chart_absent_namespaces | default([]) }}"
+      register: helm_chart_absent_namespace_releases
+      changed_when: false
+      when:
+        - helm_chart_absent_delete_namespace | default(false) | bool
+        - helm_chart_absent_namespaces | default([]) | length > 0
+
+    - name: Delete namespace after Helm release cleanup
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: "{{ item.item }}"
+        wait: true
+        wait_timeout: 600
+      environment:
+        KUBECONFIG: "{{ k8s_kubeconfig }}"
+      loop: "{{ helm_chart_absent_namespace_releases.results | default([]) }}"
+      when:
+        - helm_chart_absent_delete_namespace | default(false) | bool
+        - item.stdout is defined
+        - item.stdout | trim | length == 0
+
+
+- name: Remove local chart artifacts
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ helm_chart_absent_local_files | default([]) }}"
+  when: helm_chart_absent_local_files | default([]) | length > 0

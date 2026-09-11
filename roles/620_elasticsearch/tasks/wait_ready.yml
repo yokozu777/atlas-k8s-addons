@@ -1,0 +1,18 @@
+---
+# HTTP 401 on / is not ready: reserved realm needs .security-* primary.
+# Authenticate as elastic is the gate for POST /_security/user.
+- name: Wait until Elasticsearch reserved user can authenticate
+  ansible.builtin.uri:
+    url: "https://{{ elasticsearch_host }}/_security/_authenticate"
+    method: GET
+    url_username: "{{ k8s_users.elastic_superuser }}"
+    url_password: "{{ k8s_secrets.elastic_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: 200
+    return_content: false
+  register: elasticsearch_auth_ready
+  retries: "{{ elasticsearch_wait_retries | default(1000) }}"
+  delay: "{{ elasticsearch_wait_delay | default(5) }}"
+  until: elasticsearch_auth_ready.status | default(0) == 200
+  no_log: true

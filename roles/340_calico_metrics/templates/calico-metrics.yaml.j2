@@ -1,0 +1,58 @@
+# Felix: Tigera operator on 3.32 does not create felix-metrics-svc — headless Service + SM.
+# Typha: metrics on calico-typha-metrics (not calico-typha).
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: felix-metrics-svc
+  namespace: {{ calico_system_namespace }}
+  labels:
+    k8s-app: calico-felix-metrics
+spec:
+  clusterIP: None
+  selector:
+    k8s-app: calico-node
+  ports:
+    - name: metrics-port
+      port: {{ calico_felix_metrics_port }}
+      targetPort: {{ calico_felix_metrics_port }}
+      protocol: TCP
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: calico-felix
+  namespace: {{ calico_system_namespace }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ calico_system_namespace }}
+  selector:
+    matchLabels:
+      k8s-app: calico-felix-metrics
+  endpoints:
+    - port: metrics-port
+      path: /metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: calico-typha
+  namespace: {{ calico_system_namespace }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ calico_system_namespace }}
+  selector:
+    matchLabels:
+      k8s-app: calico-typha-metrics
+  endpoints:
+    - port: calico-typha-metrics
+      path: /metrics
+      interval: 30s
+      # Official Typha Grafana JSON filters job="typha_metrics".
+      relabelings:
+        - action: replace
+          targetLabel: job
+          replacement: typha_metrics

@@ -1,0 +1,87 @@
+---
+- name: Ensure staging directory exists for istioctl binary install
+  ansible.builtin.file:
+    path: "{{ install_istioctl_staging_dir }}"
+    state: directory
+    mode: '0700'
+
+- name: Check installed istioctl client version
+  ansible.builtin.command: "{{ install_istioctl_dest }} version --remote=false"
+  register: install_istioctl_version_cmd
+  changed_when: false
+  failed_when: false
+
+- name: Resolve istioctl download URL and controller path
+  ansible.builtin.set_fact:
+    install_istioctl_archive: "istioctl-{{ install_istioctl_version }}-linux-amd64.tar.gz"
+    install_istioctl_url: >-
+      {{
+        (
+          (debug_tooling_binary_infra_base | regex_replace('/+$', ''))
+          ~ '/istio/istio/releases/download/'
+          ~ install_istioctl_version
+          ~ '/istioctl-'
+          ~ install_istioctl_version
+          ~ '-linux-amd64.tar.gz'
+        )
+        if (debug_tooling_binary_source | default('github')) == 'infra'
+        else (
+          'https://github.com/istio/istio/releases/download/'
+          ~ install_istioctl_version
+          ~ '/istioctl-'
+          ~ install_istioctl_version
+          ~ '-linux-amd64.tar.gz'
+        )
+      }}
+    install_istioctl_controller_path: "{{ controller_staging_dir }}/debug-tooling/istioctl-{{ install_istioctl_version }}-linux-amd64.tar.gz"
+
+- name: Ensure controller staging directory for debug tooling binaries
+  ansible.builtin.file:
+    path: "{{ controller_staging_dir }}/debug-tooling"
+    state: directory
+    mode: "0750"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Check istioctl archive on controller
+  ansible.builtin.stat:
+    path: "{{ install_istioctl_controller_path }}"
+  register: install_istioctl_controller_stat
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Download istioctl archive on controller
+  ansible.builtin.get_url:
+    url: "{{ install_istioctl_url }}"
+    dest: "{{ install_istioctl_controller_path }}"
+    mode: "0644"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  environment: "{{ controller_tls_environment | default({}) }}"
+  when: not install_istioctl_controller_stat.stat.exists
+
+- name: Copy istioctl archive from controller
+  ansible.builtin.copy:
+    src: "{{ install_istioctl_controller_path }}"
+    dest: "{{ install_istioctl_staging_dir }}/{{ install_istioctl_archive }}"
+    mode: "0644"
+  when: >-
+    install_istioctl_version_cmd.rc != 0
+    or (install_istioctl_version | trim) not in (install_istioctl_version_cmd.stdout | default(''))
+
+- name: Install istioctl binary
+  ansible.builtin.shell: |
+    set -euo pipefail
+    archive="{{ install_istioctl_staging_dir }}/{{ install_istioctl_archive }}"
+    tmpdir="$(mktemp -d)"
+    trap 'rm -rf "$tmpdir"' EXIT
+    tar -xzf "$archive" -C "$tmpdir"
+    install -m 0755 "$tmpdir/istioctl" "{{ install_istioctl_dest }}"
+  args:
+    executable: /bin/bash
+  when: >-
+    install_istioctl_version_cmd.rc != 0
+    or (install_istioctl_version | trim) not in (install_istioctl_version_cmd.stdout | default(''))

@@ -1,0 +1,1074 @@
+# Default values for fluent-bit.
+
+# kind -- DaemonSet or Deployment
+kind: DaemonSet
+
+# replicaCount -- Only applicable if kind=Deployment
+replicaCount: 1
+
+image:
+  repository: cr.fluentbit.io/fluent/fluent-bit
+  # Overrides the image tag whose default is the chart AppVersion
+  # Set to "-" to not use the default value
+  tag:
+  digest:
+  pullPolicy: Always
+
+testFramework:
+  enabled: true
+  namespace:
+  image:
+    repository: busybox
+    pullPolicy: Always
+    tag: latest
+    digest:
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name:
+
+rbac:
+  create: true
+  nodeAccess: true
+  eventsAccess: true
+
+# Configure podsecuritypolicy
+# Ref: https://kubernetes.io/docs/concepts/policy/pod-security-policy/
+# from Kubernetes 1.25, PSP is deprecated
+# See: https://kubernetes.io/blog/2022/08/23/kubernetes-v1-25-release/#pod-security-changes
+# We automatically disable PSP if Kubernetes version is 1.25 or higher
+podSecurityPolicy:
+  create: false
+  annotations: {}
+
+# OpenShift-specific configuration
+openShift:
+  enabled: false
+  securityContextConstraints:
+    # Create SCC for Fluent-bit and allow use it
+    create: true
+    name: ""
+    annotations: {}
+    # Use existing SCC in cluster, rather then create new one
+    existingName: ""
+
+podSecurityContext: {}
+#   fsGroup: 2000
+
+hostNetwork: false
+dnsPolicy: ClusterFirst
+
+dnsConfig: {}
+#   nameservers:
+#     - 1.2.3.4
+#   searches:
+#     - ns1.svc.cluster-domain.example
+#     - my.dns.search.suffix
+#   options:
+#     - name: ndots
+#       value: "2"
+#     - name: edns0
+
+hostAliases: []
+#   - ip: "1.2.3.4"
+#     hostnames:
+#     - "foo.local"
+#     - "bar.local"
+
+securityContext: {}
+#   capabilities:
+#     drop:
+#     - ALL
+#   readOnlyRootFilesystem: true
+#   runAsNonRoot: true
+#   runAsUser: 1000
+
+service:
+  type: ClusterIP
+  port: 2020
+  loadBalancerClass:
+  loadBalancerSourceRanges: []
+  labels: {}
+  # nodePort: 30020
+  # clusterIP: 172.16.10.1
+  annotations: {}
+
+serviceMonitor:
+  enabled: false
+  path: /api/v1/metrics/prometheus
+  interval: 30s
+  scrapeTimeout: 10s
+  #   selector:
+  #    prometheus: my-prometheus
+  #  ## metric relabel configs to apply to samples before ingestion.
+  #  ##
+  #  metricRelabelings:
+  #    - sourceLabels: [__meta_kubernetes_service_label_cluster]
+  #      targetLabel: cluster
+  #      regex: (.*)
+  #      replacement: ${1}
+  #      action: replace
+  #  ## relabel configs to apply to samples after ingestion.
+  #  ##
+  #  relabelings:
+  #    - sourceLabels: [__meta_kubernetes_pod_node_name]
+  #      separator: ;
+  #      regex: ^(.*)$
+  #      targetLabel: nodename
+  #      replacement: $1
+  #      action: replace
+  #  scheme: ""
+  #  tlsConfig: {}
+
+  ## Beare in mind if youn want to collec metrics from a different port
+  ## you will need to configure the new ports on the extraPorts property.
+  additionalEndpoints: []
+  # - port: metrics
+  #   path: /metrics
+  #   interval: 10s
+  #   scrapeTimeout: 10s
+  #   scheme: ""
+  #   tlsConfig: {}
+  #   # metric relabel configs to apply to samples before ingestion.
+  #   #
+  #   metricRelabelings:
+  #     - sourceLabels: [__meta_kubernetes_service_label_cluster]
+  #       targetLabel: cluster
+  #       regex: (.*)
+  #       replacement: ${1}
+  #       action: replace
+  #   # relabel configs to apply to samples after ingestion.
+  #   #
+  #   relabelings:
+  #     - sourceLabels: [__meta_kubernetes_pod_node_name]
+  #       separator: ;
+  #       regex: ^(.*)$
+  #       targetLabel: nodename
+  #       replacement: $1
+  #       action: replace
+
+prometheusRule:
+  enabled: false
+#   namespace: ""
+#   additionalLabels: {}
+#   rules:
+#   - alert: NoOutputBytesProcessed
+#     expr: rate(fluentbit_output_proc_bytes_total[5m]) == 0
+#     annotations:
+#       message: |
+#         Fluent Bit instance $labels.instance's output plugin $labels.name has not processed any
+#         bytes for at least 15 minutes.
+#       summary: No Output Bytes Processed
+#     for: 15m
+#     labels:
+#       severity: critical
+
+dashboards:
+  enabled: false
+  labelKey: grafana_dashboard
+  labelValue: 1
+  annotations: {}
+  namespace: ""
+
+lifecycle: {}
+#   preStop:
+#     exec:
+#       command: ["/bin/sh", "-c", "sleep 20"]
+
+livenessProbe:
+  httpGet:
+    path: /api/v1/health
+    port: http
+
+readinessProbe:
+  httpGet:
+    path: /api/v1/health
+    port: http
+
+resources: {}
+#   limits:
+#     cpu: 100m
+#     memory: 128Mi
+#   requests:
+#     cpu: 100m
+#     memory: 128Mi
+
+## only available if kind is Deployment
+ingress:
+  enabled: false
+  ingressClassName: ""
+  annotations: {}
+  #  kubernetes.io/ingress.class: nginx
+  #  kubernetes.io/tls-acme: "true"
+  hosts: []
+  # - host: fluent-bit.example.tld
+  extraHosts: []
+  # - host: fluent-bit-extra.example.tld
+  ## specify extraPort number
+  #   port: 5170
+  tls: []
+  #  - secretName: fluent-bit-example-tld
+  #    hosts:
+  #      - fluent-bit.example.tld
+
+## only available if kind is Deployment
+autoscaling:
+  vpa:
+    enabled: false
+
+    annotations: {}
+
+    # List of resources that the vertical pod autoscaler can control. Defaults to cpu and memory
+    controlledResources: []
+
+    # Define the max allowed resources for the pod
+    maxAllowed: {}
+    # cpu: 200m
+    # memory: 100Mi
+    # Define the min allowed resources for the pod
+    minAllowed: {}
+    # cpu: 200m
+    # memory: 100Mi
+
+    updatePolicy:
+      # Specifies whether recommended updates are applied when a Pod is started and whether recommended updates
+      # are applied during the life of a Pod. Possible values are "Off", "Initial", "Recreate", and "Auto".
+      updateMode: Auto
+
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 75
+  #  targetMemoryUtilizationPercentage: 75
+  ## see https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale-walkthrough/#autoscaling-on-multiple-metrics-and-custom-metrics
+  customRules: []
+  #     - type: Pods
+  #       pods:
+  #         metric:
+  #           name: packets-per-second
+  #         target:
+  #           type: AverageValue
+  #           averageValue: 1k
+  ## see https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/#support-for-configurable-scaling-behavior
+  behavior: {}
+#      scaleDown:
+#        policies:
+#          - type: Pods
+#            value: 4
+#            periodSeconds: 60
+#          - type: Percent
+#            value: 10
+#            periodSeconds: 60
+
+## only available if kind is Deployment
+podDisruptionBudget:
+  enabled: false
+  annotations: {}
+  maxUnavailable: "30%"
+
+nodeSelector:
+  kubernetes.io/os: linux
+  # loadtype: worker
+  # node-role.kubernetes.io/control-plane: ""
+
+tolerations:
+  - key: "node-role.kubernetes.io/control-plane"
+    operator: "Exists"
+    effect: "NoSchedule"
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: loadtype
+              operator: In
+              values:
+                - worker
+                - master
+  # nodeSelector:
+  #   kubernetes.io/os: linux
+
+labels: {}
+
+annotations: {}
+
+podAnnotations: {}
+
+podLabels: {}
+
+## How long (in seconds) a pods needs to be stable before progressing the deployment
+##
+minReadySeconds:
+
+## How long (in seconds) a pod may take to exit (useful with lifecycle hooks to ensure lb deregistration is done)
+##
+terminationGracePeriodSeconds:
+
+priorityClassName: ""
+
+env:
+  - name: NODE_NAME
+    valueFrom:
+      fieldRef:
+        fieldPath: spec.nodeName
+
+# The envWithTpl array below has the same usage as "env", but is using the tpl function to support templatable string.
+# This can be useful when you want to pass dynamic values to the Chart using the helm argument "--set <variable>=<value>"
+# https://helm.sh/docs/howto/charts_tips_and_tricks/#using-the-tpl-function
+envWithTpl: []
+#  - name: FOO_2
+#    value: "<helm tpl: .Values.foo2>"
+#
+# foo2: bar2
+
+envFrom: []
+
+extraContainers: []
+#   - name: do-something
+#     image: busybox
+#     command: ['do', 'something']
+
+flush: 5
+
+metricsPort: 2020
+
+extraPorts: []
+#   - port: 5170
+#     containerPort: 5170
+#     protocol: TCP
+#     name: tcp
+#     nodePort: 30517
+
+extraVolumes:
+  - name: elastic-certificates
+    secret:
+      secretName: elastic-certificates
+  # - name: fluent-bit-luascripts
+  #   configMap:
+  #     name: fluent-bit-luascripts       
+extraVolumeMounts:
+  - name: elastic-certificates
+    mountPath: /secure
+  # - name: fluent-bit-luascripts
+  #   mountPath: /fluent-bit/scripts
+  #   subPath: extractLogLevel.lua    
+
+updateStrategy: {}
+#   type: RollingUpdate
+#   rollingUpdate:
+#     maxUnavailable: 1
+
+# Make use of a pre-defined configmap instead of the one templated here
+existingConfigMap: ""
+
+networkPolicy:
+  enabled: false
+#   ingress:
+#     from: []
+
+luaScripts:
+  detect_error.lua: |
+    local ERROR_LEVELS = {
+        ["error"] = true, ["err"] = true,
+        ["critical"] = true, ["crit"] = true,
+        ["fatal"] = true, ["panic"] = true,
+        ["emerg"] = true, ["emergency"] = true, ["alert"] = true,
+        ["severe"] = true,
+    }
+
+    local WARN_LEVELS = {
+        ["warn"] = true, ["warning"] = true,
+    }
+
+    local INFO_LEVELS = {
+        ["info"] = true, ["information"] = true, ["informational"] = true,
+        ["debug"] = true, ["dbg"] = true, ["trace"] = true, ["verbose"] = true,
+        ["notice"] = true, ["notic"] = true,
+    }
+
+    local INDEX_INFO = {% if fluentbit_index_info_logs | default(true) | bool %}true{% else %}false{% endif %}
+    local FULL_NS = {
+{% for ns in fluentbit_kube_full_namespaces | default(['falco', 'logging', 'kube-system']) %}
+        ["{{ ns }}"] = true,
+{% endfor %}
+    }
+
+    local LEVEL_FIELDS = {
+        "level", "Level", "severity", "Severity", "lvl", "L",
+        "log_level", "loglevel", "LOG_LEVEL", "priority", "Priority",
+    }
+
+    local function normalize_level(value)
+        if value == nil then
+            return nil
+        end
+        if type(value) ~= "string" then
+            value = tostring(value)
+        end
+        return string.lower(value:match("^%s*(.-)%s*$"))
+    end
+
+    local function classify_level(value)
+        local level = normalize_level(value)
+        if level == nil then
+            return nil
+        end
+        if ERROR_LEVELS[level] then
+            return "error"
+        end
+        if WARN_LEVELS[level] then
+            return "warn"
+        end
+        if INFO_LEVELS[level] then
+            return "info"
+        end
+        return nil
+    end
+
+    local function nested_processed(record)
+        local lp = record["log_processed"]
+        if type(lp) == "table" then
+            return lp
+        end
+        return nil
+    end
+
+    local function lookup_field(record, key)
+        local value = record[key]
+        if value ~= nil then
+            return value
+        end
+        local lp = nested_processed(record)
+        if lp ~= nil then
+            return lp[key]
+        end
+        return nil
+    end
+
+    local function explicit_severity(record)
+        for _, key in ipairs(LEVEL_FIELDS) do
+            local verdict = classify_level(lookup_field(record, key))
+            if verdict ~= nil then
+                return verdict
+            end
+        end
+        return nil
+    end
+
+    local function is_full_ns(record)
+        local k = record["kubernetes"]
+        if type(k) == "table" then
+            local ns = k["namespace_name"]
+            if ns ~= nil and FULL_NS[tostring(ns)] then
+                return true
+            end
+        end
+        return false
+    end
+
+    local function keep_classified(timestamp, record, severity)
+        record["atlas_severity"] = severity
+        if (not INDEX_INFO) and severity == "info" and (not is_full_ns(record)) then
+            return -1, timestamp, record
+        end
+        return 2, timestamp, record
+    end
+
+    local function get_message(record)
+        for _, key in ipairs({"log", "message", "msg", "MESSAGE", "log_message", "output"}) do
+            local value = lookup_field(record, key)
+            if value ~= nil then
+                local text = tostring(value)
+                if text ~= "" then
+                    return text
+                end
+            end
+        end
+        return nil
+    end
+
+    local function restore_log(record)
+        local existing = record["log"]
+        if existing ~= nil and tostring(existing) ~= "" then
+            return
+        end
+        local message = get_message(record)
+        if message ~= nil then
+            record["log"] = message
+        end
+    end
+
+    local function http_status_error(record, message)
+        for _, key in ipairs({"response_code", "status", "status_code", "http_status"}) do
+            local code = tonumber(lookup_field(record, key))
+            if code ~= nil and code >= 500 and code < 600 then
+                return true
+            end
+        end
+        if message == nil then
+            return false
+        end
+        return message:match(" HTTP/1%.[01] 5%d%d") ~= nil
+            or message:match('" 5%d%d ') ~= nil
+            or message:match(" status=5%d%d") ~= nil
+            or message:match('"status":5%d%d') ~= nil
+            or message:match('"status": 5%d%d') ~= nil
+            or message:match("response_code=5%d%d") ~= nil
+    end
+
+    local function structured_error_field(record)
+        for _, key in ipairs({"error", "err", "exception"}) do
+            local value = lookup_field(record, key)
+            if value ~= nil then
+                local text = tostring(value)
+                if text ~= "" and string.lower(text) ~= "nil" and string.lower(text) ~= "null" then
+                    return true
+                end
+            end
+        end
+        return false
+    end
+
+    local function klog_warning(message)
+        return message:match("^W%d%d%d%d%s") ~= nil
+    end
+
+    local function klog_error(message)
+        return message:match("^[EF]%d%d%d%d%s") ~= nil
+    end
+
+    local function has_warn_level_hint(message)
+        local lower = string.lower(message)
+        return lower:match("level=warn") ~= nil
+            or lower:match("level=warning") ~= nil
+            or lower:match("level=\"warn\"") ~= nil
+            or lower:match("level=\"warning\"") ~= nil
+            or lower:match('"level":"warn"') ~= nil
+            or lower:match('"level": "warn"') ~= nil
+            or lower:match('"level":"warning"') ~= nil
+            or lower:match('"level": "warning"') ~= nil
+            or lower:match("level='warn'") ~= nil
+            or lower:match("level='warning'") ~= nil
+            or lower:match("%[warn%]") ~= nil
+            or lower:match("%[warning%]") ~= nil
+    end
+
+    local function has_info_level_hint(message)
+        local lower = string.lower(message)
+        return lower:match("level=info") ~= nil
+            or lower:match("level=\"info\"") ~= nil
+            or lower:match('"level":"info"') ~= nil
+            or lower:match('"level": "info"') ~= nil
+            or lower:match("level='info'") ~= nil
+            or lower:match("%[info%]") ~= nil
+    end
+
+    -- Calico/Felix "[INFO]" / "[WARNING]" / "[ERROR]" before substring heuristics.
+    local function bracket_level(message)
+        local lower = string.lower(message)
+        if lower:match("%[error%]")
+            or lower:match("%[err%]")
+            or lower:match("%[crit%]")
+            or lower:match("%[critical%]")
+            or lower:match("%[alert%]")
+            or lower:match("%[emerg%]")
+            or lower:match("%[fatal%]") then
+            return "error"
+        end
+        if lower:match("%[warn%]") or lower:match("%[warning%]") then
+            return "warn"
+        end
+        if lower:match("%[info%]")
+            or lower:match("%[information%]")
+            or lower:match("%[debug%]")
+            or lower:match("%[trace%]") then
+            return "info"
+        end
+        return nil
+    end
+
+    local function ceph_health_level(message)
+        if message:match("HEALTH_ERR") then
+            return "error"
+        end
+        if message:match("HEALTH_WARN") then
+            return "warn"
+        end
+        return nil
+    end
+
+    local function text_error(message)
+        if has_info_level_hint(message) then
+            return false
+        end
+
+        local lower = string.lower(message)
+        if lower:match("no error")
+            or lower:match("without error")
+            or lower:match("error=nil")
+            or lower:match("error: nil")
+            or lower:match("error is nil") then
+            return false
+        end
+
+        if message:match("%[error%]")
+            or message:match("%[crit%]")
+            or message:match("%[alert%]")
+            or message:match("%[emerg%]") then
+            return true
+        end
+
+        -- "failed=false" / ansible recap "failed=0" are not errors.
+        local benign_failed = lower:match("failed=false") ~= nil
+            or lower:match("failed=0") ~= nil
+            or lower:match("failed=no") ~= nil
+
+        if lower:match("traceback %(most recent call last%)")
+            or lower:match("unhandled error")
+            or lower:match("exception")
+            or lower:match("panic")
+            or lower:match("fatal")
+            or lower:match("critical")
+            or lower:match(" failure")
+            or ((not benign_failed) and lower:match(" failed"))
+            or lower:match(" fail:")
+            or lower:match(" err=")
+            or lower:match(' err="')
+            or lower:match(": error")
+            or lower:match("=error")
+            or lower:match(" error ")
+            or lower:match("^error ")
+            or lower:match(" error:")
+            or lower:match(" error%]") then
+            return true
+        end
+
+        if message:match("ERROR %[")
+            or message:match(" ERROR:")
+            or message:match(" ERROR ")
+            or message:match(" ERROR%]") then
+            return true
+        end
+
+        return lower:match("[^%w]error[^%w]") ~= nil
+            or lower:match("^error[^%w]") ~= nil
+            or lower:match("[^%w]error$") ~= nil
+            or lower == "error"
+            or lower:match("[^%w]err[^%w]") ~= nil
+            or lower:match("^err[^%w]") ~= nil
+    end
+
+    local function text_warning(message)
+        if has_info_level_hint(message) then
+            return false
+        end
+
+        if klog_warning(message) or has_warn_level_hint(message) then
+            return true
+        end
+
+        local lower = string.lower(message)
+        if lower:match(" warning")
+            or lower:match("^warning")
+            or lower:match(" warn ")
+            or lower:match("^warn ")
+            or lower:match(" warn:")
+            or lower:match("=warn")
+            or lower:match('"level":"warn"')
+            or lower:match("deprecated") then
+            return true
+        end
+
+        return false
+    end
+
+    local function classify_message_text(record, message)
+        local bracket = bracket_level(message)
+        if bracket ~= nil then
+            return bracket
+        end
+        local health = ceph_health_level(message)
+        if health ~= nil then
+            return health
+        end
+        if klog_error(message) then
+            return "error"
+        end
+        if klog_warning(message) then
+            return "warn"
+        end
+        if http_status_error(record, message) then
+            return "error"
+        end
+        if text_error(message) then
+            return "error"
+        end
+        if text_warning(message) then
+            return "warn"
+        end
+        return nil
+    end
+
+    local function classify_kube(record)
+        local message = get_message(record)
+        local explicit = explicit_severity(record)
+        if explicit ~= nil then
+            return explicit
+        end
+        if structured_error_field(record) then
+            return "error"
+        end
+        if message ~= nil then
+            local from_text = classify_message_text(record, message)
+            if from_text ~= nil then
+                return from_text
+            end
+        end
+        return "info"
+    end
+
+    local function classify_host(record)
+        local pri = record["PRIORITY"]
+        local priority = tonumber(pri)
+        local message = get_message(record)
+        if priority ~= nil and priority <= 3 then
+            return "error"
+        end
+
+        local from_text = nil
+        local explicit = explicit_severity(record)
+        if explicit ~= nil then
+            from_text = explicit
+        elseif structured_error_field(record) then
+            from_text = "error"
+        elseif message ~= nil then
+            from_text = classify_message_text(record, message)
+            if from_text == nil and has_info_level_hint(message) then
+                from_text = "info"
+            end
+        end
+
+        if priority == 4 then
+            if from_text == "error" then
+                return "error"
+            end
+            return "warn"
+        end
+        if from_text ~= nil then
+            return from_text
+        end
+        return "info"
+    end
+
+    function detect_error(tag, timestamp, record)
+        restore_log(record)
+        return keep_classified(timestamp, record, classify_kube(record))
+    end
+
+    -- host.* / host.syslog / host.heartbeat: set atlas_severity; drop info only when INDEX_INFO is false
+    function stamp_hostname(record)
+        local node = os.getenv("NODE_NAME")
+        if node ~= nil and node ~= "" then
+            record["_HOSTNAME"] = node
+        end
+    end
+
+    function detect_host_log(tag, timestamp, record)
+        stamp_hostname(record)
+        if record["atlas_heartbeat"] ~= nil then
+            record["atlas_heartbeat"] = "true"
+            record["atlas_severity"] = "info"
+            return 2, timestamp, record
+        end
+        restore_log(record)
+        if (record["MESSAGE"] == nil or tostring(record["MESSAGE"]) == "")
+            and record["log"] ~= nil and tostring(record["log"]) ~= "" then
+            record["MESSAGE"] = tostring(record["log"])
+        end
+        return keep_classified(timestamp, record, classify_host(record))
+    end
+
+## https://docs.fluentbit.io/manual/administration/configuring-fluent-bit/classic-mode/configuration-file
+config:
+  service: |
+    [SERVICE]
+        Daemon Off
+        Flush 5
+        Log_Level warn
+        Parsers_File /fluent-bit/etc/parsers.conf
+        Parsers_File /fluent-bit/etc/conf/custom_parsers.conf
+        HTTP_Server On
+        HTTP_Listen 0.0.0.0
+        HTTP_Port 2020
+        Health_Check On
+
+  ## https://docs.fluentbit.io/manual/pipeline/inputs
+  inputs: |
+    [INPUT]
+        Name tail
+        Path /var/log/containers/*.log
+        Path_Key filename
+        multiline.parser cri
+        Tag kube.*
+        DB /var/log/fluentbit_kube.db
+        Mem_Buf_Limit 50MB
+        Skip_Long_Lines On
+        Buffer_Max_Size 128KB
+        storage.type memory
+{% set _excl_ns = fluentbit_kube_tail_exclude_namespaces | default(['rook-ceph', 'rook-ceph-cluster', 'chaos-mesh']) %}
+{% if _excl_ns %}
+        Exclude_Path {% for ns in _excl_ns %}/var/log/containers/*_{{ ns }}_*.log{% if not loop.last %},{% endif %}{% endfor %}
+{% endif %}
+
+    [INPUT]
+        Name systemd
+        Tag host.*
+        Read_From_Tail On
+        DB /var/log/fluentbit_systemd.db
+        Mem_Buf_Limit 50MB
+        storage.type memory
+        Systemd_Filter_Type Or
+        Systemd_Filter PRIORITY=0
+        Systemd_Filter PRIORITY=1
+        Systemd_Filter PRIORITY=2
+        Systemd_Filter PRIORITY=3
+        Systemd_Filter PRIORITY=4
+
+{% if fluentbit_host_syslog_tail | default(true) | bool %}
+    [INPUT]
+        Name tail
+        Path {{ fluentbit_host_syslog_paths | default('/var/log/messages,/var/log/syslog') }}
+        Tag host.syslog
+        DB /var/log/fluentbit_syslog.db
+        Mem_Buf_Limit 50MB
+        Skip_Long_Lines On
+        Buffer_Max_Size 128KB
+        storage.type memory
+{% endif %}
+
+    [INPUT]
+        Name dummy
+        Tag host.heartbeat
+        Dummy {"atlas_heartbeat":"true","atlas_severity":"info"}
+        Interval_Sec 60
+        Flush_on_startup On
+
+  ## https://docs.fluentbit.io/manual/pipeline/filters
+{% set _sev_re = '(?i)(\\[\s*(err|error|warn|warning|crit|critical|fatal|emerg|alert)\\s*\\]|[EWF][0-9]{4}|HEALTH_ERR|HEALTH_WARN|level[=:]["\']?(err|error|warn|warning|crit|fatal)|"level"\\s*:\\s*"(err|error|warn|warning|crit|fatal))' %}
+{% set _full_ns = fluentbit_kube_full_namespaces | default(['falco', 'logging', 'kube-system']) %}
+  filters: |
+{% if fluentbit_suppress_calico_audit_webhook_noise | default(true) | bool %}
+    [FILTER]
+        Name grep
+        Match kube.*
+        Exclude log audit-logging.api.projectcalico.org
+{% endif %}
+{% if fluentbit_early_severity_gate | default(true) | bool %}
+    [FILTER]
+        Name grep
+        Match kube.*
+{% if _full_ns %}
+        Logical_Op or
+{% endif %}
+        Regex log {{ _sev_re }}
+{% if _full_ns %}
+        Regex filename _({{ _full_ns | join('|') }})_
+{% endif %}
+{% endif %}
+
+    [FILTER]
+        Name kubernetes
+        Match kube.*
+        Merge_Log On
+        Merge_Log_Key log_processed
+        Keep_Log Off
+        K8S-Logging.Parser On
+        K8S-Logging.Exclude On
+        Annotations Off
+        Buffer_Size 32k
+
+{% if fluentbit_suppress_calico_audit_webhook_noise | default(true) | bool %}
+    [FILTER]
+        Name grep
+        Match host*
+        Exclude log audit-logging.api.projectcalico.org
+        Exclude MESSAGE audit-logging.api.projectcalico.org
+{% endif %}
+{% if (fluentbit_early_severity_gate | default(true) | bool) and (fluentbit_host_syslog_tail | default(true) | bool) %}
+    [FILTER]
+        Name grep
+        Match host.syslog
+        Regex log {{ _sev_re }}
+{% endif %}
+
+    [FILTER]
+        Name modify
+        Match host*
+        Set _HOSTNAME ${NODE_NAME}
+
+    [FILTER]
+        Name lua
+        Match kube.*
+        script /fluent-bit/scripts/detect_error.lua
+        call detect_error
+
+    [FILTER]
+        Name lua
+        Match host*
+        script /fluent-bit/scripts/detect_error.lua
+        call detect_host_log
+  ## https://docs.fluentbit.io/manual/pipeline/outputs
+  # Poison bulk must not retry forever; Trace_Error prints ES HTTP body.
+  outputs: |
+    [OUTPUT]
+        Name es
+        Match kube.*
+        Host {{ elastic_es_output_host }}
+        http_User {{ k8s_users.elastic_logger }}
+        http_Passwd {{ k8s_secrets.elastic_logger_password }}
+        tls On
+        tls.verify Off
+        Port {{ elastic_es_output_port }}
+        Logstash_Format On
+        Logstash_Prefix kube-logs
+        Retry_Limit {{ fluentbit_es_retry_limit }}
+{% if fluentbit_es_trace_error | default(true) | bool %}
+        Trace_Error On
+{% endif %}
+        Suppress_Type_Name On
+        tls.ca_file /secure/ca.crt
+        Buffer_Size 512k
+        Replace_Dots On
+
+    [OUTPUT]
+        Name es
+        Match host*
+        Host {{ elastic_es_output_host }}
+        http_User {{ k8s_users.elastic_logger }}
+        http_Passwd {{ k8s_secrets.elastic_logger_password }}
+        tls On
+        tls.verify Off        
+        Port {{ elastic_es_output_port }}
+        Logstash_Format On
+        Logstash_Prefix host-logs
+        Retry_Limit {{ fluentbit_es_retry_limit }}
+{% if fluentbit_es_trace_error | default(true) | bool %}
+        Trace_Error On
+{% endif %}
+        Suppress_Type_Name On
+        tls.ca_file /secure/ca.crt
+        Buffer_Size 512k
+        Replace_Dots On
+
+    # [OUTPUT]
+    #     Name stdout
+    #     Match host.*
+
+  ## https://docs.fluentbit.io/manual/administration/configuring-fluent-bit/classic-mode/upstream-servers
+  ## This configuration is deprecated, please use `extraFiles` instead.
+  upstream: {}
+
+  ## https://docs.fluentbit.io/manual/pipeline/parsers
+  customParsers: |
+    # [PARSER]
+    #     Name docker_no_time
+    #     Format json
+    #     Time_Keep Off
+    #     Time_Key time
+    #     Time_Format %Y-%m-%dT%H:%M:%S.%L
+    # [PARSER]
+    #     # http://rubular.com/r/tjUt3Awgg4
+    #     Name cri
+    #     Format regex
+    #     Regex ^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) (?<message>.*)$
+    #     Time_Key    time
+    #     Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+
+  # This allows adding more files with arbitary filenames to /fluent-bit/etc/conf by providing key/value pairs.
+  # The key becomes the filename, the value becomes the file content.
+  extraFiles: {}
+#     upstream.conf: |
+#       [UPSTREAM]
+#           upstream1
+#
+#       [NODE]
+#           name       node-1
+#           host       127.0.0.1
+#           port       43000
+#     example.conf: |
+#       [OUTPUT]
+#           Name example
+#           Match foo.*
+#           Host bar
+
+# The config volume is mounted by default, either to the existingConfigMap value, or the default of "fluent-bit.fullname"
+volumeMounts:
+  - name: config
+    mountPath: /fluent-bit/etc/conf
+
+daemonSetVolumes:
+  - name: varlog
+    hostPath:
+      path: /var/log
+  - name: varlibdockercontainers
+    hostPath:
+      path: /var/lib/docker/containers
+  - name: etcmachineid
+    hostPath:
+      path: /etc/machine-id
+      type: File
+  # - name: fluent-bit-luascripts
+  #   configMap:
+  #     name: fluent-bit-luascripts      
+
+daemonSetVolumeMounts:
+  - name: varlog
+    mountPath: /var/log
+  - name: varlibdockercontainers
+    mountPath: /var/lib/docker/containers
+    readOnly: true
+  - name: etcmachineid
+    mountPath: /etc/machine-id
+    readOnly: true
+  # - name: fluent-bit-luascripts
+  #   mountPath: /fluent-bit/lua-scripts/extractLogLevel.lua
+  #   subPath: extractLogLevel.lua
+
+command:
+  - /fluent-bit/bin/fluent-bit
+
+args:
+  - --workdir=/fluent-bit/etc
+  - --config=/fluent-bit/etc/conf/fluent-bit.conf
+
+# This supports either a structured array or a templatable string
+initContainers: []
+
+# Array mode
+# initContainers:
+#   - name: do-something
+#     image: bitnami/kubectl:1.22
+#     command: ['kubectl', 'version']
+
+# String mode
+# initContainers: |-
+#   - name: do-something
+#     image: bitnami/kubectl:<kube-major>.<kube-minor>  # helm .Capabilities.KubeVersion
+#     command: ['kubectl', 'version']
+
+logLevel: error
+
+hotReload:
+  enabled: false
+  image:
+    repository: ghcr.io/jimmidyson/configmap-reload
+    tag: v0.11.1
+    digest:
+    pullPolicy: IfNotPresent
+  resources: {}

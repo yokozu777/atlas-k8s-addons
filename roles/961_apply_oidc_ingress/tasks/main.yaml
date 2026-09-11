@@ -1,0 +1,45 @@
+---
+- name: Reset active OIDC ingress app list
+  ansible.builtin.set_fact:
+    k8s_ingress_apps_oidc_active: []
+
+- name: Select present oidc_auth ingress apps
+  ansible.builtin.set_fact:
+    k8s_ingress_apps_oidc_active: "{{ k8s_ingress_apps_oidc_active + [item] }}"
+  loop: "{{ k8s_ingress_apps | default([]) }}"
+  when:
+    - item.oidc_auth | default(false) | bool
+    - >-
+      (item.chart_state_var | default('') | length == 0)
+      or (lookup('vars', item.chart_state_var, default='present') | default('present') == 'present')
+
+- name: Skip OIDC ingress when no oidc_auth apps are present
+  ansible.builtin.debug:
+    msg: No oidc_auth ingress apps with chart_state present; skipping 961_apply_oidc_ingress
+  when: k8s_ingress_apps_oidc_active | length == 0
+
+- name: Apply OIDC HTTPRoute and SecurityPolicy
+  when: k8s_ingress_apps_oidc_active | length > 0
+  block:
+    - name: Wait for Keycloak before OIDC SecurityPolicy
+      ansible.builtin.uri:
+        url: "{{ keycloak_url }}/auth/realms/master/protocol/openid-connect/token"
+        method: POST
+        status_code: 400
+        validate_certs: false
+      register: keycloak_oidc_ingress_check
+      retries: 600
+      delay: 3
+      until: >-
+        keycloak_oidc_ingress_check.status is defined
+        and keycloak_oidc_ingress_check.status in [400, 401, 403]
+
+    - name: Render Envoy Gateway OIDC SecurityPolicy
+      ansible.builtin.template:
+        src: oidc-securitypolicy.yaml.j2
+        dest: "{{ k8s_manifests_dir }}/oidc-securitypolicy.yaml"
+        mode: "0644"
+
+    - name: Apply Envoy Gateway OIDC SecurityPolicy
+      ansible.builtin.command: >-
+        kubectl --validate=false apply -f {{ k8s_manifests_dir }}/oidc-securitypolicy.yaml

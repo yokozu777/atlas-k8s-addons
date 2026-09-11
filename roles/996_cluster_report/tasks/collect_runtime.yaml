@@ -1,0 +1,127 @@
+---
+- name: Initialize cluster credentials runtime secret list
+  ansible.builtin.set_fact:
+    cluster_credentials_report_runtime: []
+    cluster_credentials_runtime_skipped_reason: ""
+
+- name: Stat controller kubeconfig for runtime secret collection
+  ansible.builtin.stat:
+    path: "{{ controller_kubeconfig }}"
+  register: cluster_credentials_kubeconfig_stat
+
+- name: Record runtime secret collection skip reason
+  ansible.builtin.set_fact:
+    cluster_credentials_runtime_skipped_reason: "{{ cluster_credentials_runtime_skip_reason }}"
+    cluster_credentials_report_runtime: []
+  when: cluster_credentials_runtime_collect_skip | bool
+  vars:
+    cluster_credentials_runtime_collect_skip: >-
+      {{
+        not (cluster_credentials_collect_runtime | default(true) | bool)
+        or not (cluster_credentials_kubeconfig_stat.stat.exists | default(false) | bool)
+      }}
+    cluster_credentials_runtime_skip_reason: >-
+      {%- if not (cluster_credentials_collect_runtime | default(true) | bool) -%}
+      disabled (cluster_credentials_collect_runtime=false)
+      {%- elif not (cluster_credentials_kubeconfig_stat.stat.exists | default(false) | bool) -%}
+      kubeconfig not found at {{ controller_kubeconfig }}
+      {%- endif -%}
+
+- name: Build filtered runtime secret catalog
+  ansible.builtin.set_fact:
+    cluster_credentials_runtime_secrets_filtered: "{{ cluster_credentials_runtime_secrets_filtered_rows }}"
+  when: not (cluster_credentials_runtime_collect_skip | bool)
+  vars:
+    cluster_credentials_runtime_collect_skip: >-
+      {{
+        not (cluster_credentials_collect_runtime | default(true) | bool)
+        or not (cluster_credentials_kubeconfig_stat.stat.exists | default(false) | bool)
+      }}
+    cluster_credentials_runtime_secrets_filtered_rows: >-
+      {%- set rows = [] -%}
+      {%- for item in cluster_credentials_runtime_secrets -%}
+      {%- if item.state_var is not defined
+            or (lookup('vars', item.state_var) | default('present')) == 'present' -%}
+      {%- set _ = rows.append(item) -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ rows }}
+
+- name: Fetch runtime secrets from Kubernetes API
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ item.secret }}"
+    namespace: "{{ lookup('vars', item.namespace_var) }}"
+  loop: "{{ cluster_credentials_runtime_secrets_filtered | default([]) }}"
+  register: cluster_credentials_runtime_lookups
+  when:
+    - not (cluster_credentials_runtime_collect_skip | bool)
+    - cluster_credentials_runtime_secrets_filtered | default([]) | length > 0
+  failed_when: false
+  loop_control:
+    label: "{{ item.id }}"
+  no_log: true
+  vars:
+    cluster_credentials_runtime_collect_skip: >-
+      {{
+        not (cluster_credentials_collect_runtime | default(true) | bool)
+        or not (cluster_credentials_kubeconfig_stat.stat.exists | default(false) | bool)
+      }}
+
+- name: Build runtime secret rows from Kubernetes API results
+  ansible.builtin.set_fact:
+    cluster_credentials_report_runtime: "{{ cluster_credentials_runtime_built_rows }}"
+  when:
+    - not (cluster_credentials_runtime_collect_skip | bool)
+    - cluster_credentials_runtime_lookups is defined
+  vars:
+    cluster_credentials_runtime_collect_skip: >-
+      {{
+        not (cluster_credentials_collect_runtime | default(true) | bool)
+        or not (cluster_credentials_kubeconfig_stat.stat.exists | default(false) | bool)
+      }}
+    cluster_credentials_runtime_built_rows: >-
+      {%- set rows = [] -%}
+      {%- for result in cluster_credentials_runtime_lookups.results | default([]) -%}
+      {%- if result.skipped is not defined or not result.skipped -%}
+      {%- if result.resources | default([]) | length > 0 -%}
+      {%- set item = result.item -%}
+      {%- set data = result.resources[0].data | default({}) -%}
+      {%- if item.data_key in data -%}
+      {%- set val = data[item.data_key] | b64decode -%}
+      {%- set masked = (
+            val[:2] ~ ('*' * (val | length - 4)) ~ val[-2:]
+            if cluster_credentials_mode == 'summary' and val | length > 4
+            else val
+          ) -%}
+      {%- set _ = rows.append({
+        'id': item.id,
+        'title': item.title,
+        'secret': item.secret,
+        'namespace': lookup('vars', item.namespace_var),
+        'data_key': item.data_key,
+        'value': val,
+        'value_masked': masked,
+      }) -%}
+      {%- endif -%}
+      {%- endif -%}
+      {%- endif -%}
+      {%- endfor -%}
+      {{ rows }}
+  no_log: true
+
+- name: Merge runtime secrets into cluster credentials report
+  ansible.builtin.set_fact:
+    cluster_credentials_report: >-
+      {{
+        cluster_credentials_report
+        | combine(
+            {
+              'runtime_secrets': cluster_credentials_report_runtime | default([]),
+              'runtime_skipped_reason': cluster_credentials_runtime_skipped_reason | default(''),
+            },
+            recursive=True,
+          )
+      }}
+  no_log: true

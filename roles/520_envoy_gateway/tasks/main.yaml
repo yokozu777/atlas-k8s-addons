@@ -1,0 +1,122 @@
+---
+- name: Remove {{ envoy_gateway_namespace }} Helm chart (absent)
+  when: envoy_gateway_chart_state | default('present') == 'absent'
+  ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+  vars:
+    helm_chart_absent_releases:
+      - name: "{{ envoy_gateway_release_name }}"
+        namespace: "{{ envoy_gateway_namespace }}"
+    helm_chart_absent_delete_namespace: true
+    helm_chart_absent_namespaces:
+      - "{{ envoy_gateway_namespace }}"
+    helm_chart_absent_cluster_resources:
+      - api_version: gateway.networking.k8s.io/v1
+        kind: GatewayClass
+        name: "{{ envoy_gateway_gatewayclass_name }}"
+    helm_chart_absent_extra_manifests:
+      - "{{ k8s_manifests_dir }}/envoy-gateway-controlplane.yaml"
+      - "{{ k8s_manifests_dir }}/envoy-gateway-servicemonitor.yaml"
+      - "{{ k8s_manifests_dir }}/gateway-routes.yaml"
+    helm_chart_absent_local_files:
+      - "{{ k8s_manifests_dir }}/envoy-gateway.yaml"
+      - "{{ k8s_manifests_dir }}/envoy-gateway-controlplane.yaml"
+      - "{{ k8s_manifests_dir }}/envoy-gateway-servicemonitor.yaml"
+
+- name: Install/configure envoy gateway chart
+  when: envoy_gateway_chart_state | default('present') == 'present'
+  block:
+    - name: Render envoy gateway helm values
+      ansible.builtin.template:
+        src: envoy-gateway.yaml.j2
+        dest: "{{ k8s_manifests_dir }}/envoy-gateway.yaml"
+        mode: "0644"
+
+    - name: Helming envoy gateway
+      ansible.builtin.command: >-
+        helm upgrade --install {{ envoy_gateway_release_name }}
+        {{ envoy_gateway_chart_oci }}
+        --namespace {{ envoy_gateway_namespace }}
+        --create-namespace
+        --set crds.enabled=true
+        -f {{ k8s_manifests_dir }}/envoy-gateway.yaml
+        {{ envoy_gateway_chart_version | helm_chart_version_args }}
+
+    - name: Wait for Envoy Gateway CRDs
+      ansible.builtin.command: >-
+        kubectl wait --for=condition=established --timeout=180s
+        crd/gatewayclasses.gateway.networking.k8s.io
+        crd/gateways.gateway.networking.k8s.io
+        crd/httproutes.gateway.networking.k8s.io
+        crd/tlsroutes.gateway.networking.k8s.io
+        crd/envoyproxies.gateway.envoyproxy.io
+        crd/securitypolicies.gateway.envoyproxy.io
+        crd/backends.gateway.envoyproxy.io
+        crd/envoypatchpolicies.gateway.envoyproxy.io
+        crd/clienttrafficpolicies.gateway.envoyproxy.io
+      register: wait_eg_crd
+      until: wait_eg_crd.rc == 0
+      retries: 20
+      delay: 6
+      changed_when: false
+
+    - name: Wait for Envoy Gateway deployment
+      ansible.builtin.command: >-
+        kubectl wait --timeout=5m
+        -n {{ envoy_gateway_namespace }}
+        deployment/envoy-gateway
+        --for=condition=Available
+      register: wait_eg_deploy
+      until: wait_eg_deploy.rc == 0
+      retries: 10
+      delay: 6
+      changed_when: false
+
+    - name: Render envoy gateway control-plane manifests
+      ansible.builtin.template:
+        src: envoy-gateway-controlplane.yaml.j2
+        dest: "{{ k8s_manifests_dir }}/envoy-gateway-controlplane.yaml"
+        mode: "0644"
+
+    - name: Apply envoy gateway control-plane manifests
+      ansible.builtin.command: >-
+        kubectl --validate=false apply -f {{ k8s_manifests_dir }}/envoy-gateway-controlplane.yaml
+
+    - name: Wait for Envoy Gateway Programmed
+      ansible.builtin.command: >-
+        kubectl wait --timeout=5m
+        -n {{ envoy_gateway_namespace }}
+        gateway/{{ envoy_gateway_gateway_name }}
+        --for=condition=Programmed
+      register: wait_eg_gateway
+      until: wait_eg_gateway.rc == 0
+      retries: 10
+      delay: 6
+      changed_when: false
+
+    - name: Wait for Envoy Gateway LoadBalancer IP
+      ansible.builtin.command: >-
+        kubectl get gateway {{ envoy_gateway_gateway_name }}
+        -n {{ envoy_gateway_namespace }}
+        -o jsonpath='{.status.addresses[0].value}'
+      register: wait_eg_lb_ip
+      until: wait_eg_lb_ip.stdout | trim == ingress_lb_ip
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Render envoy gateway ServiceMonitor
+      ansible.builtin.template:
+        src: envoy-gateway-servicemonitor.yaml.j2
+        dest: "{{ k8s_manifests_dir }}/envoy-gateway-servicemonitor.yaml"
+        mode: "0644"
+
+    - name: Apply envoy gateway ServiceMonitor
+      ansible.builtin.command: >-
+        kubectl --validate=false apply -f {{ k8s_manifests_dir }}/envoy-gateway-servicemonitor.yaml
+
+    - name: Remove leftover data-plane ServiceMonitor
+      ansible.builtin.command: >-
+        kubectl --ignore-not-found delete servicemonitor
+        -n {{ envoy_gateway_namespace }} envoy-gateway-proxy
+      changed_when: false
+      failed_when: false

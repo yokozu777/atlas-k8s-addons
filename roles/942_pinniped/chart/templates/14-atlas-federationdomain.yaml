@@ -1,0 +1,15 @@
+apiVersion: config.supervisor.pinniped.dev/v1alpha1
+kind: FederationDomain
+metadata:
+  name: {{ .Values.idpName }}
+  namespace: {{ .Values.pinnipedNamespace }}
+spec:
+  issuer: {{ .Values.federationIssuer | quote }}
+  tls:
+    secretName: {{ .Values.httpsSecretName }}
+  identityProviders:
+    - displayName: {{ .Values.idpName | quote }}
+      objectRef:
+        apiGroup: idp.supervisor.pinniped.dev
+        kind: OIDCIdentityProvider
+        name: {{ .Values.idpName }}
