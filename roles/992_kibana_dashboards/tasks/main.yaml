@@ -21,8 +21,8 @@
       - 200
       - 204
       - 404
-    url_username: "{{ k8s_users.kibana_dashboard }}"
-    url_password: "{{ k8s_secrets.kibana_elastic_password }}"
+    url_username: "{{ k8s_users.elastic_admin }}"
+    url_password: "{{ k8s_secrets.elastic_admin_password }}"
     force_basic_auth: true
     validate_certs: false
   loop:
@@ -46,8 +46,8 @@
       file:
         content: "{{ lookup('file', item.path) }}"
         filename: "{{ item.path | basename }}"
-    url_username: "{{ k8s_users.kibana_dashboard }}"
-    url_password: "{{ k8s_secrets.kibana_elastic_password }}"
+    url_username: "{{ k8s_users.elastic_admin }}"
+    url_password: "{{ k8s_secrets.elastic_admin_password }}"
     force_basic_auth: true
     validate_certs: false
     status_code: 200

@@ -10,8 +10,8 @@
       - 200
       - 204
       - 404
-    url_username: "{{ k8s_users.kibana_dashboard }}"
-    url_password: "{{ k8s_secrets.kibana_elastic_password }}"
+    url_username: "{{ k8s_users.elastic_admin }}"
+    url_password: "{{ k8s_secrets.elastic_admin_password }}"
     force_basic_auth: true
     validate_certs: false
 
