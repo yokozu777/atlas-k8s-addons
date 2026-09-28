@@ -53,3 +53,43 @@
         - name: Apply chaos-mesh ServiceMonitors
           ansible.builtin.command: >-
             kubectl --validate=false apply -f {{ k8s_manifests_dir }}/chaos-mesh-servicemonitor.yaml
+
+        - name: Wait for Chaos Mesh controller-manager Deployment
+          ansible.builtin.command: >-
+            kubectl rollout status deployment/chaos-controller-manager
+            -n {{ chaos_mesh_namespace }} --timeout=300s
+          register: wait_chaos_controller
+          until: wait_chaos_controller.rc == 0
+          retries: 5
+          delay: 10
+          changed_when: false
+
+        - name: Wait for Chaos Mesh dashboard Deployment
+          ansible.builtin.command: >-
+            kubectl rollout status deployment/chaos-dashboard
+            -n {{ chaos_mesh_namespace }} --timeout=300s
+          register: wait_chaos_dashboard
+          until: wait_chaos_dashboard.rc == 0
+          retries: 5
+          delay: 10
+          changed_when: false
+
+        - name: Wait for Chaos Mesh dns-server Deployment
+          ansible.builtin.command: >-
+            kubectl rollout status deployment/chaos-dns-server
+            -n {{ chaos_mesh_namespace }} --timeout=300s
+          register: wait_chaos_dns
+          until: wait_chaos_dns.rc == 0
+          retries: 5
+          delay: 10
+          changed_when: false
+
+        - name: Wait for Chaos Mesh daemon DaemonSet
+          ansible.builtin.command: >-
+            kubectl rollout status daemonset/chaos-daemon
+            -n {{ chaos_mesh_namespace }} --timeout=300s
+          register: wait_chaos_daemon
+          until: wait_chaos_daemon.rc == 0
+          retries: 5
+          delay: 10
+          changed_when: false

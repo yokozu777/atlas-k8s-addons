@@ -60,14 +60,42 @@
             -f {{ k8s_manifests_dir }}/kyverno.yaml
             {{ kyverno_chart_version | helm_chart_version_args }}
 
-        - name: Wait for Kyverno admission-controller Ready
+        - name: Wait for Kyverno admission-controller Deployment
           ansible.builtin.command: >-
-            kubectl wait --timeout=5m
-            -n {{ kyverno_namespace }}
-            --for=condition=Ready
-            pod -l app.kubernetes.io/component=admission-controller
+            kubectl rollout status deployment/kyverno-admission-controller
+            -n {{ kyverno_namespace }} --timeout=300s
           register: wait_kyverno_admission
           until: wait_kyverno_admission.rc == 0
-          retries: 20
-          delay: 6
+          retries: 5
+          delay: 10
+          changed_when: false
+
+        - name: Wait for Kyverno background-controller Deployment
+          ansible.builtin.command: >-
+            kubectl rollout status deployment/kyverno-background-controller
+            -n {{ kyverno_namespace }} --timeout=300s
+          register: wait_kyverno_background
+          until: wait_kyverno_background.rc == 0
+          retries: 5
+          delay: 10
+          changed_when: false
+
+        - name: Wait for Kyverno cleanup-controller Deployment
+          ansible.builtin.command: >-
+            kubectl rollout status deployment/kyverno-cleanup-controller
+            -n {{ kyverno_namespace }} --timeout=300s
+          register: wait_kyverno_cleanup
+          until: wait_kyverno_cleanup.rc == 0
+          retries: 5
+          delay: 10
+          changed_when: false
+
+        - name: Wait for Kyverno reports-controller Deployment
+          ansible.builtin.command: >-
+            kubectl rollout status deployment/kyverno-reports-controller
+            -n {{ kyverno_namespace }} --timeout=300s
+          register: wait_kyverno_reports
+          until: wait_kyverno_reports.rc == 0
+          retries: 5
+          delay: 10
           changed_when: false

@@ -39,3 +39,43 @@
         - name: Apply Falco ServiceMonitors
           ansible.builtin.command: >-
             kubectl --validate=false apply -f {{ k8s_manifests_dir }}/falco-servicemonitor.yaml
+
+        - name: Wait for Falco DaemonSet
+          ansible.builtin.command: >-
+            kubectl rollout status daemonset/falco
+            -n {{ falco_namespace }} --timeout=300s
+          register: wait_falco
+          until: wait_falco.rc == 0
+          retries: 5
+          delay: 10
+          changed_when: false
+
+        - name: Wait for Falcosidekick Deployment
+          ansible.builtin.command: >-
+            kubectl rollout status deployment/falco-falcosidekick
+            -n {{ falco_namespace }} --timeout=300s
+          register: wait_falcosidekick
+          until: wait_falcosidekick.rc == 0
+          retries: 5
+          delay: 10
+          changed_when: false
+
+        - name: Wait for Falcosidekick UI Redis StatefulSet
+          ansible.builtin.command: >-
+            kubectl rollout status statefulset/falco-falcosidekick-ui-redis
+            -n {{ falco_namespace }} --timeout=300s
+          register: wait_falcosidekick_redis
+          until: wait_falcosidekick_redis.rc == 0
+          retries: 5
+          delay: 10
+          changed_when: false
+
+        - name: Wait for Falcosidekick UI Deployment
+          ansible.builtin.command: >-
+            kubectl rollout status deployment/falco-falcosidekick-ui
+            -n {{ falco_namespace }} --timeout=300s
+          register: wait_falcosidekick_ui
+          until: wait_falcosidekick_ui.rc == 0
+          retries: 5
+          delay: 10
+          changed_when: false
