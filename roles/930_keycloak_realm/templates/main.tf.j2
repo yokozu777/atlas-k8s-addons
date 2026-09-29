@@ -221,6 +221,76 @@ terraform {
     add_to_userinfo     = true
   }
 
+  # 7b. Client: openbao (OpenBao auth/oidc — not Envoy SecurityPolicy)
+  resource "keycloak_openid_client_scope" "aud_openbao_scope" {
+    realm_id = keycloak_realm.org.id
+    name     = "aud-openbao"
+  }
+
+  resource "keycloak_openid_audience_protocol_mapper" "aud_openbao_mapper" {
+    realm_id        = keycloak_realm.org.id
+    client_scope_id = keycloak_openid_client_scope.aud_openbao_scope.id
+    name            = "aud-openbao"
+
+    included_custom_audience = "openbao"
+    add_to_id_token          = true
+    add_to_access_token      = true
+  }
+
+  resource "keycloak_openid_client" "openbao_client" {
+    realm_id                     = keycloak_realm.org.id
+    client_id                    = "openbao"
+    name                         = "OpenBao"
+    enabled                      = true
+    access_type                  = "CONFIDENTIAL"
+    client_secret                = "{{ k8s_secrets.openbao_oidc_client_secret }}"
+
+    standard_flow_enabled                     = true
+    direct_access_grants_enabled              = true
+    oauth2_device_authorization_grant_enabled = true
+
+    backchannel_logout_session_required = false
+
+    root_url = "https://{{ openbao_host }}"
+    valid_redirect_uris = [
+      "https://{{ openbao_host }}/ui/vault/auth/oidc/oidc/callback",
+      "http://localhost:8250/oidc/callback",
+    ]
+    web_origins = ["https://{{ openbao_host }}"]
+  }
+
+  resource "keycloak_openid_client_default_scopes" "openbao_defaults" {
+    realm_id  = keycloak_realm.org.id
+    client_id = keycloak_openid_client.openbao_client.id
+
+    default_scopes = concat(local.kc26_oidc_builtin_default_scopes, ["aud-openbao"])
+  }
+
+  resource "keycloak_group" "openbao_admins" {
+    realm_id = keycloak_realm.org.id
+    name     = "openbao-admins"
+  }
+
+  resource "keycloak_group_memberships" "openbao_admins_members" {
+    realm_id = keycloak_realm.org.id
+    group_id = keycloak_group.openbao_admins.id
+    members = [
+      keycloak_user.admin_user.username,
+    ]
+  }
+
+  resource "keycloak_openid_group_membership_protocol_mapper" "openbao_groups" {
+    realm_id  = keycloak_realm.org.id
+    client_id = keycloak_openid_client.openbao_client.id
+    name      = "groups"
+
+    claim_name          = "groups"
+    full_path           = false
+    add_to_id_token     = true
+    add_to_access_token = true
+    add_to_userinfo     = true
+  }
+
   # 8. Client: argocd (Argo CD native OIDC — not Envoy SecurityPolicy)
   resource "keycloak_openid_client_scope" "aud_argocd_scope" {
     realm_id = keycloak_realm.org.id

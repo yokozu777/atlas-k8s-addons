@@ -167,6 +167,7 @@ helm_repo_upstreams:
   - { name: fluent, nexus_path: fluent, upstream_url: "https://fluent.github.io/helm-charts", upstream_host: fluent.github.io }
   - { name: elastic, nexus_path: helm.elastic.local/, upstream_url: "https://helm.elastic.co", upstream_host: helm.elastic.co }
   - { name: hashicorp, nexus_path: helm.releases.hashicorp.com/, upstream_url: "https://helm.releases.hashicorp.com", upstream_host: helm.releases.hashicorp.com }
+  - { name: openbao, nexus_path: openbao-helm/, upstream_url: "https://openbao.github.io/openbao-helm", upstream_host: openbao.github.io }
   - { name: istio, nexus_path: istio/, upstream_url: "https://istio-release.storage.googleapis.com/charts", upstream_host: istio-release.storage.googleapis.com }
   - { name: kiali, nexus_path: kiali/, upstream_url: "https://kiali.org/helm-charts", upstream_host: kiali.org }
   - { name: argo, nexus_path: argo/, upstream_url: "https://argoproj.github.io/argo-helm", upstream_host: argoproj.github.io }
@@ -203,6 +204,7 @@ helm_repos:
   - { name: fluent, path: fluent }
   - { name: elastic, path: helm.elastic.local/ }
   - { name: hashicorp, path: helm.releases.hashicorp.com/ }
+  - { name: openbao, path: openbao-helm/ }
   - { name: istio, path: istio/ }
   - { name: kiali, path: kiali/ }
   - { name: argo, path: argo/ }
@@ -228,7 +230,7 @@ helm_repos:
   - { name: policy-reporter, path: policy-reporter/ }
   - { name: mailu, path: mailu/ }
 # Remaining namespaces: 210_helm_bootstrap; list below = needed before helm (secrets/prepare)
-# Helm --create-namespace: tracing, falco, istio-system, vault, chaos-mesh, argo-rollouts, oauth2-proxy, cnpg-system, headlamp, kyverno, policy-reporter, pinniped, mailu, trivy-system, opencost
+# Helm --create-namespace: tracing, falco, istio-system, vault, openbao, chaos-mesh, argo-rollouts, oauth2-proxy, cnpg-system, headlamp, kyverno, policy-reporter, pinniped, mailu, trivy-system, opencost
 k8s_platform_namespaces:
   - "{{ monitoring_namespace }}"
   - "{{ logging_namespace }}"
@@ -456,6 +458,7 @@ rook_host: "rook.{{ k8s_cluster_domain }}"
 argocd_host: "argo.{{ k8s_cluster_domain }}"
 argo_rollouts_host: "rollouts.{{ k8s_cluster_domain }}"
 vault_host: "vault.{{ k8s_cluster_domain }}"
+openbao_host: "openbao.{{ k8s_cluster_domain }}"
 chaos_mesh_host: "chaos-mesh.{{ k8s_cluster_domain }}"
 opencost_host: "opencost.{{ k8s_cluster_domain }}"
 pinniped_host: "pinniped.{{ k8s_cluster_domain }}"
@@ -598,6 +601,13 @@ k8s_ingress_apps:
     host: "{{ vault_host }}"
     namespace: "{{ vault_namespace }}"
     service: vault
+    port: 8200
+
+  - name: openbao
+    chart_state_var: openbao_chart_state
+    host: "{{ openbao_host }}"
+    namespace: "{{ openbao_namespace }}"
+    service: openbao
     port: 8200
 
   - name: kiali
@@ -935,6 +945,21 @@ vault_admin: vault-admin
 # vault-k8s on MutatingWebhookConfiguration caBundle). Do not delete the webhook.
 # (ingress in 971_vault/templates/vault.yaml.j2)
 
+# --- 973_openbao ---
+# Chart openbao/openbao 0.29.3. Separate namespace from Vault.
+# HA uses integrated Raft (PVC /openbao/data), not Consul. One replica uses file storage.
+openbao_namespace: openbao
+openbao_ha_replicas: 3  # 1 = standalone file (openbao-0); N>1 = HA Raft StatefulSet
+openbao_chart_version: "0.29.3"
+openbao_chart_state: present
+openbao_admin: openbao-admin
+# openbao_admin_password → atlas-k8s-addons.secrets.yml
+# openbao_oidc_client_secret → atlas-k8s-addons.secrets.yml (Keycloak client openbao)
+# OIDC login: Keycloak group openbao-admins. userpass {{ openbao_admin }} remains break-glass.
+# Unseal keys SoT: /root/openbao-init-keys.txt on k8s_masters via SSH plays
+# (chmod 600). Controller-state is a cache, not SoT.
+# (ingress in 973_openbao/templates/openbao.yaml.j2)
+
 # --- 972_external_secrets ---
 # Pin: ClusterSecretStore apiVersion external-secrets.io/v1 (chart 0.20.x, k8s ≥1.30).
 external_secrets_chart_version: "0.20.4"
@@ -1018,6 +1043,7 @@ k8s_users:
   elastic_jaeger: "{{ elastic_jaeger }}"
   ceph_dashboard: "{{ ceph_dashboard }}"
   vault_admin: "{{ vault_admin }}"
+  openbao_admin: "{{ openbao_admin }}"
 
 # --- k8s_secrets: aggregate for role templates (values from sections above) ---
 k8s_secrets:
@@ -1029,6 +1055,7 @@ k8s_secrets:
   oauth2_proxy_cookie_secret: "{{ oauth2_proxy_cookie_secret }}"
   envoy_gateway_oidc_client_secret: "{{ envoy_gateway_oidc_client_secret }}"
   vault_oidc_client_secret: "{{ vault_oidc_client_secret }}"
+  openbao_oidc_client_secret: "{{ openbao_oidc_client_secret }}"
   argocd_oidc_client_secret: "{{ argocd_oidc_client_secret }}"
   pinniped_supervisor_client_secret: "{{ pinniped_supervisor_client_secret }}"
   mailu_secret_key: "{{ mailu_secret_key }}"
@@ -1049,3 +1076,4 @@ k8s_secrets:
   sentry_admin_password: "{{ sentry_admin_password }}"
   graylog_root_password: "{{ graylog_root_password }}"
   vault_admin_password: "{{ vault_admin_password }}"
+  openbao_admin_password: "{{ openbao_admin_password }}"

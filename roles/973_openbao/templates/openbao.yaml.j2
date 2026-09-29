@@ -1,0 +1,72 @@
+{% set openbao_replicas = openbao_ha_replicas | default(3) | int %}
+server:
+  dataStorage:
+    enabled: true
+{% if openbao_replicas > 1 %}
+  ha:
+    enabled: true
+    replicas: {{ openbao_replicas }}
+    raft:
+      enabled: true
+      setNodeId: true
+      config: |
+        ui = true
+
+        listener "tcp" {
+          tls_disable = 1
+          address = "[::]:8200"
+          cluster_address = "[::]:8201"
+          telemetry {
+            unauthenticated_metrics_access = true
+          }
+        }
+
+        telemetry {
+          prometheus_retention_time = "30s"
+          disable_hostname = true
+        }
+
+        storage "raft" {
+          path = "/openbao/data"
+{% for i in range(openbao_replicas) %}
+          retry_join {
+            leader_api_addr = "http://openbao-{{ i }}.openbao-internal.{{ openbao_namespace }}.svc.{{ k8s_dns_domain }}:8200"
+          }
+{% endfor %}
+        }
+
+        service_registration "kubernetes" {}
+{% else %}
+  standalone:
+    enabled: true
+    config: |
+      ui = true
+
+      listener "tcp" {
+        tls_disable = 1
+        address = "[::]:8200"
+        cluster_address = "[::]:8201"
+        telemetry {
+          unauthenticated_metrics_access = true
+        }
+      }
+
+      telemetry {
+        prometheus_retention_time = "30s"
+        disable_hostname = true
+      }
+
+      storage "file" {
+        path = "/openbao/data"
+      }
+{% endif %}
+  ingress:
+    enabled: false
+ui:
+  enabled: true
+
+serverTelemetry:
+  serviceMonitor:
+    enabled: true
+    selectors:
+      release: prometheus

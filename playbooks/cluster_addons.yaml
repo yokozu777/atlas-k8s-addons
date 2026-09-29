@@ -309,6 +309,74 @@
 - hosts: localhost
   connection: local
   gather_facts: false
+  become: false
+  environment: *platform_environment
+  vars: *platform_vars
+  pre_tasks:
+    - name: Use controller venv interpreter for platform roles
+      ansible.builtin.set_fact:
+        ansible_python_interpreter: "{{ controller_python_venv }}/bin/python"
+      tags: [973_openbao]
+    - name: Gather facts for platform play
+      ansible.builtin.setup:
+      tags: [973_openbao]
+  roles:
+    - role: 973_openbao
+      tags: 973_openbao
+
+- hosts: "{{ k8s_master_hosts | default('k8s_masters') }}"
+  user: "{{ k8s_admin_user | default('localuser') }}"
+  become: true
+  become_user: root
+  gather_facts: false
+  tags: [973_openbao]
+  vars: *platform_vars
+  tasks:
+    - name: keys_collect - fetch unseal keys from masters
+      ansible.builtin.import_role:
+        name: 973_openbao
+        tasks_from: keys_collect.yml
+      when: openbao_chart_state | default('present') == 'present'
+
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  environment: *platform_environment
+  vars: *platform_vars
+  pre_tasks:
+    - name: Use controller venv interpreter for platform roles
+      ansible.builtin.set_fact:
+        ansible_python_interpreter: "{{ controller_python_venv }}/bin/python"
+      tags: [973_openbao]
+    - name: Gather facts for platform play
+      ansible.builtin.setup:
+      tags: [973_openbao]
+  tasks:
+    - name: unseal - init and bootstrap OpenBao
+      ansible.builtin.import_role:
+        name: 973_openbao
+        tasks_from: unseal.yml
+      tags: 973_openbao
+      when: openbao_chart_state | default('present') == 'present'
+
+- hosts: "{{ k8s_master_hosts | default('k8s_masters') }}"
+  user: "{{ k8s_admin_user | default('localuser') }}"
+  become: true
+  become_user: root
+  gather_facts: false
+  tags: [973_openbao]
+  vars: *platform_vars
+  tasks:
+    - name: keys_distribute - copy unseal keys to masters
+      ansible.builtin.import_role:
+        name: 973_openbao
+        tasks_from: keys_distribute.yml
+      when: openbao_chart_state | default('present') == 'present'
+
+- hosts: localhost
+  connection: local
+  gather_facts: false
   strategy: linear
   become: false
   environment: *platform_environment

@@ -24,6 +24,7 @@
       - external_secrets_chart_version | default('') | length > 0
       - kibana_chart_version | default('') | length > 0
       - vault_ha_replicas | default(0) | int >= 1
+      - openbao_ha_replicas | default(0) | int >= 1
       - (istio_tracing_sampling_percentage | default(100)) is number
       - istio_tracing_sampling_percentage | default(100) | float >= 0
       - istio_tracing_sampling_percentage | default(100) | float <= 100

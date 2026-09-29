@@ -1,6 +1,6 @@
 # Scan kube-system only (not cluster-wide). excludeNamespaces is unused when
 # targetNamespaces is set. No chart UI/ingress; reports are CRs + Prometheus.
-targetNamespaces: "kube-system"
+targetNamespaces: "default"
 
 # CIS node-collector Jobs pin to kubernetes.io/hostname (incl. control-plane).
 # Operator 0.34.0 ignores nodeCollector.tolerations on Jobs

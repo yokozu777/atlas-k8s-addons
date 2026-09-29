@@ -82,5 +82,6 @@ k8s_chart_state_vars:
   - oauth2_proxy_chart_state
   - consul_chart_state
   - vault_chart_state
+  - openbao_chart_state
   - external_secrets_chart_state
   - sentry_chart_state

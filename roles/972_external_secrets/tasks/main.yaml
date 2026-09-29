@@ -67,6 +67,16 @@
           delay: 5
           changed_when: false
 
+        - name: Wait until OpenBao is unsealed
+          when: openbao_chart_state | default('present') == 'present'
+          ansible.builtin.command: >-
+            kubectl exec -n {{ openbao_namespace }} openbao-0 -- bao status
+          register: wait_openbao_unsealed_for_eso
+          until: wait_openbao_unsealed_for_eso.rc == 0
+          retries: 120
+          delay: 5
+          changed_when: false
+
         - name: Render Vault ClusterSecretStore
           ansible.builtin.template:
             src: clustersecretstore.yaml.j2
@@ -88,6 +98,17 @@
             --for=condition=Ready --timeout=120s
           register: wait_clustersecretstore_ready
           until: wait_clustersecretstore_ready.rc == 0
+          retries: 30
+          delay: 10
+          changed_when: false
+
+        - name: Wait for ClusterSecretStore openbao Ready
+          when: openbao_chart_state | default('present') == 'present'
+          ansible.builtin.command: >-
+            kubectl wait clustersecretstore/openbao
+            --for=condition=Ready --timeout=120s
+          register: wait_openbao_clustersecretstore_ready
+          until: wait_openbao_clustersecretstore_ready.rc == 0
           retries: 30
           delay: 10
           changed_when: false

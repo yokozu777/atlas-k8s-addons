@@ -720,6 +720,89 @@ class K8sAddonsHygieneTest(unittest.TestCase):
             f"--tags 971_vault must not list 972_external_secrets:\n{out}",
         )
 
+    def test_list_tasks_tags_973_openbao_includes_ssh_key_plays(self) -> None:
+        """--tags 973_openbao runs controller install/unseal and SSH key collect/distribute."""
+        inv = REPO_ROOT / "inventory-example.yml"
+        playbook = REPO_ROOT / "playbooks" / "cluster_addons.yaml"
+        proc = subprocess.run(
+            [
+                "ansible-playbook",
+                str(playbook),
+                "-i",
+                str(inv),
+                "--tags",
+                "973_openbao",
+                "--list-tasks",
+            ],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        self.assertEqual(proc.returncode, 0, out)
+        for needle in ("keys_collect", "unseal:", "keys_distribute"):
+            self.assertIn(needle, out, f"--tags 973_openbao must list {needle}:\n{out}")
+        self.assertNotIn(
+            "972_external_secrets :",
+            out,
+            f"--tags 973_openbao must not list 972_external_secrets:\n{out}",
+        )
+        self.assertNotIn(
+            "971_vault :",
+            out,
+            f"--tags 973_openbao must not list 971_vault:\n{out}",
+        )
+
+    def test_openbao_helm_repo_raft_storage_and_take_ownership(self) -> None:
+        """OpenBao HA uses integrated Raft, not the Vault Consul."""
+        catalog = (REPO_ROOT / "group_vars" / "all" / "atlas-k8s-addons.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('name: openbao, nexus_path: openbao-helm/', catalog)
+        self.assertIn(
+            'upstream_url: "https://openbao.github.io/openbao-helm"',
+            catalog,
+        )
+        self.assertIn("name: openbao, path: openbao-helm/", catalog)
+        self.assertIn('openbao_chart_version: "0.29.3"', catalog)
+        values = (
+            REPO_ROOT / "roles" / "973_openbao" / "templates" / "openbao.yaml.j2"
+        ).read_text(encoding="utf-8")
+        self.assertIn("raft:", values)
+        self.assertIn("enabled: true", values)
+        self.assertIn("setNodeId: true", values)
+        self.assertIn('storage "raft"', values)
+        self.assertIn('path = "/openbao/data"', values)
+        self.assertIn("retry_join", values)
+        self.assertIn("openbao-internal.{{ openbao_namespace }}.svc.", values)
+        self.assertNotIn('storage "consul"', values)
+        self.assertNotIn("consul-server", values)
+        text = (REPO_ROOT / "roles" / "973_openbao" / "tasks" / "main.yaml").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("consul", text)
+        chunks = re.split(r"(?m)^\s+- name:", text)
+        helming = next(
+            (c for c in chunks if c.lstrip().startswith("Helming openbao\n")),
+            None,
+        )
+        self.assertIsNotNone(
+            helming, "Helming openbao task missing in 973_openbao/tasks/main.yaml"
+        )
+        self.assertIn("--take-ownership", helming)
+        self.assertIn("--force-conflicts", helming)
+        store = (
+            REPO_ROOT
+            / "roles"
+            / "972_external_secrets"
+            / "templates"
+            / "clustersecretstore.yaml.j2"
+        ).read_text(encoding="utf-8")
+        self.assertIn("name: openbao", store)
+        self.assertIn("http://openbao.{{ openbao_namespace }}.svc.", store)
+        self.assertIn('namespace: "{{ vault_namespace }}"', store)
+
     def test_prometheus_adapter_resource_queries_skip_pod_cgroup(self) -> None:
         """HPA metrics.k8s.io must ignore cAdvisor pause/pod cgroup series."""
         text = (
@@ -2114,6 +2197,7 @@ data:
             "oauth2_proxy_defaults": 'concat(local.kc26_oidc_builtin_default_scopes, ["aud-oauth2-proxy"])',
             "envoy_gateway_defaults": 'concat(local.kc26_oidc_builtin_default_scopes, ["aud-envoy-gateway"])',
             "vault_defaults": 'concat(local.kc26_oidc_builtin_default_scopes, ["aud-vault"])',
+            "openbao_defaults": 'concat(local.kc26_oidc_builtin_default_scopes, ["aud-openbao"])',
             "argocd_defaults": 'concat(local.kc26_oidc_builtin_default_scopes, ["aud-argocd"])',
             "kubernetes_defaults": 'concat(local.kc26_oidc_builtin_default_scopes, ["aud-kubernetes"])',
         }
@@ -2162,12 +2246,17 @@ data:
             "keycloak_openid_client.oauth2_proxy_client",
             "keycloak_openid_client.envoy_gateway_client",
             "keycloak_openid_client.vault_client",
+            "keycloak_openid_client.openbao_client",
             "keycloak_openid_client.argocd_client",
             "keycloak_openid_client.kubernetes_client",
             "keycloak_group.vault_admins",
+            "keycloak_group.openbao_admins",
             "keycloak_group.argocd_admins",
             "keycloak_group.k8s_admins",
             "keycloak_openid_group_membership_protocol_mapper.vault_groups",
+            "keycloak_openid_client_scope.aud_openbao_scope",
+            "keycloak_openid_audience_protocol_mapper.aud_openbao_mapper",
+            "keycloak_openid_group_membership_protocol_mapper.openbao_groups",
             "keycloak_openid_group_membership_protocol_mapper.argocd_groups",
             "keycloak_openid_group_membership_protocol_mapper.kubernetes_groups",
             "keycloak_openid_client.pinniped_supervisor_client",
@@ -3650,6 +3739,7 @@ class PublishHygieneTest(unittest.TestCase):
             "oauth2-proxy": "oauth2_proxy_chart_state",
             "headlamp": "headlamp_chart_state",
             "vault": "vault_chart_state",
+            "openbao": "openbao_chart_state",
             "kiali": "kiali_chart_state",
             "jaeger": "jaeger_chart_state",
             "falco": "falco_chart_state",

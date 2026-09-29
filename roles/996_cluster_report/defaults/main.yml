@@ -356,6 +356,18 @@ cluster_credentials_services:
     password_key: vault_admin_password
     notes: "OIDC (Keycloak client vault, group vault-admins) plus userpass {{ vault_admin }} break-glass. Unseal keys: /root/vault-init-keys.txt on k8s_masters (chmod 600)."
 
+  - id: openbao
+    section: security
+    title: OpenBao
+    icon: "🔒"
+    state_var: openbao_chart_state
+    host_var: openbao_host
+    namespace_var: openbao_namespace
+    auth: local
+    username_var: openbao_admin
+    password_key: openbao_admin_password
+    notes: "OIDC (Keycloak client openbao, group openbao-admins) plus userpass {{ openbao_admin }} break-glass. Unseal keys: /root/openbao-init-keys.txt on k8s_masters (chmod 600). HA storage is integrated Raft on PVC /openbao/data."
+
   - id: falco
     section: security
     title: Falco UI
@@ -435,6 +447,9 @@ cluster_credentials_oauth_secrets:
   - id: vault_oidc
     title: Vault OIDC client secret
     password_key: vault_oidc_client_secret
+  - id: openbao_oidc
+    title: OpenBao OIDC client secret
+    password_key: openbao_oidc_client_secret
   - id: argocd_oidc
     title: Argo CD OIDC client secret
     password_key: argocd_oidc_client_secret

@@ -1,0 +1,71 @@
+    - name: Remove openbao Helm chart (absent)
+      when: openbao_chart_state | default('present') == 'absent'
+      ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/helm_chart_absent.yaml"
+      vars:
+        helm_chart_absent_releases:
+          - name: openbao
+            namespace: "{{ openbao_namespace }}"
+        helm_chart_absent_ingress_app_names:
+          - openbao
+        helm_chart_absent_cluster_resources:
+          - api_version: admissionregistration.k8s.io/v1
+            kind: MutatingWebhookConfiguration
+            name: openbao-agent-injector-cfg
+        helm_chart_absent_local_files:
+          - "{{ k8s_manifests_dir }}/openbao.yaml"
+          - "{{ k8s_manifests_dir }}/openbao.sh"
+          - "{{ k8s_manifests_dir }}/openbao-bootstrap.sh"
+          - "{{ k8s_manifests_dir }}/openbao-oidc-ca.pem"
+    - name: Install/configure openbao chart
+      when: openbao_chart_state | default('present') == 'present'
+      block:
+        - name: Render openbao helm values
+          ansible.builtin.template:
+            src: openbao.yaml.j2
+            dest: "{{ k8s_manifests_dir }}/openbao.yaml"
+            mode: '0644'
+
+        - name: Template openbao init script
+          ansible.builtin.template:
+            src: openbao.sh.j2
+            dest: "{{ k8s_manifests_dir }}/openbao.sh"
+            mode: '0755'
+
+        - name: Template openbao bootstrap script
+          ansible.builtin.template:
+            src: openbao-bootstrap.sh.j2
+            dest: "{{ k8s_manifests_dir }}/openbao-bootstrap.sh"
+            mode: '0755'
+
+        # Helm 4 SSA vs field manager on the injector MutatingWebhookConfiguration
+        # caBundle. --take-ownership steals the Helm release manager only;
+        # --force-conflicts is required on every upgrade. Do not delete the webhook.
+        - name: Helming openbao
+          ansible.builtin.command: >-
+            helm upgrade --install {{ item }}
+            --create-namespace
+            --take-ownership
+            --force-conflicts
+            {{ openbao_chart_version | helm_chart_version_args }}
+          loop:
+            - openbao openbao/openbao --namespace {{ openbao_namespace }} -f {{ k8s_manifests_dir }}/openbao.yaml
+
+        - name: Wait until openbao API is responding
+          ansible.builtin.shell: |
+            set -o pipefail
+            kubectl exec -n {{ openbao_namespace }} openbao-0 -- bao status -format=json
+            rc=$?
+            # bao status: 0=unsealed, 1=error, 2=sealed (API up, init/unseal pending)
+            if [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ]; then
+              exit 0
+            fi
+            exit "$rc"
+          args:
+            executable: /bin/bash
+          environment:
+            KUBECONFIG: "{{ k8s_kubeconfig }}"
+          register: openbao_status_check
+          until: openbao_status_check.rc == 0
+          retries: 120
+          delay: 5
+          changed_when: false

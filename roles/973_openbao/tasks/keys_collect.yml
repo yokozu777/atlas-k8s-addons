@@ -1,0 +1,42 @@
+---
+- name: "keys_collect: Stat unseal keys on this master"
+  when: openbao_chart_state | default('present') == 'present'
+  ansible.builtin.stat:
+    path: "{{ openbao_unseal_keys_remote }}"
+  register: openbao_keys_stat
+
+- name: Pick first master with unseal keys
+  when:
+    - openbao_chart_state | default('present') == 'present'
+    - (hostvars[k8s_cluster_fact_host]['openbao_keys_fetch_host'] | default('')) | length == 0
+    - hostvars[item].openbao_keys_stat.stat.exists | default(false)
+    - hostvars[item].openbao_keys_stat.stat.size | default(0) | int > 0
+  ansible.builtin.set_fact:
+    openbao_keys_fetch_host: "{{ item }}"
+  loop: "{{ ansible_play_hosts }}"
+  run_once: true
+  delegate_to: "{{ k8s_cluster_fact_host }}"
+  delegate_facts: true
+  connection: local
+  become: false
+
+- name: Fetch unseal keys from master
+  when:
+    - openbao_chart_state | default('present') == 'present'
+    - inventory_hostname == (hostvars[k8s_cluster_fact_host]['openbao_keys_fetch_host'] | default(''))
+  ansible.builtin.fetch:
+    src: "{{ openbao_unseal_keys_remote }}"
+    dest: "{{ k8s_manifests_dir }}/openbao-init-keys.txt"
+    flat: true
+
+- name: Restrict controller unseal keys mode
+  when:
+    - openbao_chart_state | default('present') == 'present'
+    - hostvars[k8s_cluster_fact_host]['openbao_keys_fetch_host'] | default('') | length > 0
+  ansible.builtin.file:
+    path: "{{ k8s_manifests_dir }}/openbao-init-keys.txt"
+    mode: '0600'
+  run_once: true
+  delegate_to: "{{ k8s_cluster_fact_host }}"
+  connection: local
+  become: false

@@ -141,6 +141,7 @@
             - oauth2-proxy
             - envoy-gateway
             - vault
+            - openbao
             - argocd
             - kubernetes
             - pinniped-supervisor
@@ -156,6 +157,7 @@
           register: kc_groups
           loop:
             - vault-admins
+            - openbao-admins
             - argocd-admins
             - k8s-admins
 
@@ -196,6 +198,16 @@
                 (
                   kc_client_scopes.json
                   | selectattr('name', 'equalto', 'aud-vault')
+                  | list
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_aud_openbao_scope_id: >-
+              {{
+                (
+                  kc_client_scopes.json
+                  | selectattr('name', 'equalto', 'aud-openbao')
                   | list
                   | first
                   | default({})
@@ -273,6 +285,20 @@
                   | default({})
                 ).id | default('')
               }}
+            kc_openbao_client_id: >-
+              {{
+                (
+                  (
+                    kc_oidc_clients.results
+                    | selectattr('item', 'equalto', 'openbao')
+                    | map(attribute='json')
+                    | first
+                    | default([])
+                  )
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
             kc_argocd_client_id: >-
               {{
                 (
@@ -325,10 +351,20 @@
                   | default({})
                 ).id | default('')
               }}
-            kc_argocd_admins_group_id: >-
+            kc_openbao_admins_group_id: >-
               {{
                 (
                   kc_groups.results[1].json
+                  | selectattr('name', 'equalto', 'openbao-admins')
+                  | list
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_argocd_admins_group_id: >-
+              {{
+                (
+                  kc_groups.results[2].json
                   | selectattr('name', 'equalto', 'argocd-admins')
                   | list
                   | first
@@ -338,7 +374,7 @@
             kc_k8s_admins_group_id: >-
               {{
                 (
-                  kc_groups.results[2].json
+                  kc_groups.results[3].json
                   | selectattr('name', 'equalto', 'k8s-admins')
                   | list
                   | first
@@ -349,10 +385,12 @@
             kc_aud_mapper_id: ""
             kc_aud_eg_mapper_id: ""
             kc_aud_vault_mapper_id: ""
+            kc_aud_openbao_mapper_id: ""
             kc_aud_argocd_mapper_id: ""
             kc_aud_kubernetes_mapper_id: ""
             kc_aud_pinniped_supervisor_mapper_id: ""
             kc_vault_groups_mapper_id: ""
+            kc_openbao_groups_mapper_id: ""
             kc_argocd_groups_mapper_id: ""
             kc_kubernetes_groups_mapper_id: ""
             kc_pinniped_groups_mapper_id: ""
@@ -370,6 +408,7 @@
             - { key: oauth2, name: aud-oauth2-proxy, id: "{{ kc_aud_scope_id }}" }
             - { key: eg, name: aud-envoy-gateway, id: "{{ kc_aud_eg_scope_id }}" }
             - { key: vault, name: aud-vault, id: "{{ kc_aud_vault_scope_id }}" }
+            - { key: openbao, name: aud-openbao, id: "{{ kc_aud_openbao_scope_id }}" }
             - { key: argocd, name: aud-argocd, id: "{{ kc_aud_argocd_scope_id }}" }
             - { key: kubernetes, name: aud-kubernetes, id: "{{ kc_aud_kubernetes_scope_id }}" }
             - { key: pinniped, name: aud-pinniped-supervisor, id: "{{ kc_aud_pinniped_supervisor_scope_id }}" }
@@ -385,6 +424,17 @@
             status_code: 200
           register: kc_vault_client_mappers
           when: kc_vault_client_id | length > 0
+
+        - name: Lookup Keycloak openbao client protocol mappers
+          ansible.builtin.uri:
+            url: >-
+              {{ keycloak_url }}/auth/admin/realms/{{ keycloak_realm }}/clients/{{ kc_openbao_client_id }}/protocol-mappers/models
+            headers:
+              Authorization: "Bearer {{ kc_token.json.access_token }}"
+            validate_certs: false
+            status_code: 200
+          register: kc_openbao_client_mappers
+          when: kc_openbao_client_id | length > 0
 
         - name: Lookup Keycloak argocd client protocol mappers
           ansible.builtin.uri:
@@ -472,6 +522,23 @@
                   | default({})
                 ).id | default('')
               }}
+            kc_aud_openbao_mapper_id: >-
+              {{
+                (
+                  (
+                    kc_scope_mappers.results
+                    | selectattr('json', 'defined')
+                    | selectattr('item.key', 'equalto', 'openbao')
+                    | map(attribute='json')
+                    | first
+                    | default([])
+                  )
+                  | selectattr('name', 'equalto', 'aud-openbao')
+                  | list
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
             kc_aud_argocd_mapper_id: >-
               {{
                 (
@@ -529,6 +596,20 @@
                   (
                     kc_vault_client_mappers.json
                     if not (kc_vault_client_mappers.skipped | default(false))
+                    else []
+                  )
+                  | selectattr('name', 'equalto', 'groups')
+                  | list
+                  | first
+                  | default({})
+                ).id | default('')
+              }}
+            kc_openbao_groups_mapper_id: >-
+              {{
+                (
+                  (
+                    kc_openbao_client_mappers.json
+                    if not (kc_openbao_client_mappers.skipped | default(false))
                     else []
                   )
                   | selectattr('name', 'equalto', 'groups')
@@ -602,6 +683,11 @@
             - { address: keycloak_openid_client.vault_client, id: "{{ keycloak_realm }}/{{ kc_vault_client_id }}" }
             - { address: keycloak_group.vault_admins, id: "{{ keycloak_realm }}/{{ kc_vault_admins_group_id }}" }
             - { address: keycloak_openid_group_membership_protocol_mapper.vault_groups, id: "{{ keycloak_realm }}/client/{{ kc_vault_client_id }}/{{ kc_vault_groups_mapper_id }}" }
+            - { address: keycloak_openid_client_scope.aud_openbao_scope, id: "{{ keycloak_realm }}/{{ kc_aud_openbao_scope_id }}" }
+            - { address: keycloak_openid_audience_protocol_mapper.aud_openbao_mapper, id: "{{ keycloak_realm }}/client-scope/{{ kc_aud_openbao_scope_id }}/{{ kc_aud_openbao_mapper_id }}" }
+            - { address: keycloak_openid_client.openbao_client, id: "{{ keycloak_realm }}/{{ kc_openbao_client_id }}" }
+            - { address: keycloak_group.openbao_admins, id: "{{ keycloak_realm }}/{{ kc_openbao_admins_group_id }}" }
+            - { address: keycloak_openid_group_membership_protocol_mapper.openbao_groups, id: "{{ keycloak_realm }}/client/{{ kc_openbao_client_id }}/{{ kc_openbao_groups_mapper_id }}" }
             - { address: keycloak_openid_client_scope.aud_argocd_scope, id: "{{ keycloak_realm }}/{{ kc_aud_argocd_scope_id }}" }
             - { address: keycloak_openid_audience_protocol_mapper.aud_argocd_mapper, id: "{{ keycloak_realm }}/client-scope/{{ kc_aud_argocd_scope_id }}/{{ kc_aud_argocd_mapper_id }}" }
             - { address: keycloak_openid_client.argocd_client, id: "{{ keycloak_realm }}/{{ kc_argocd_client_id }}" }

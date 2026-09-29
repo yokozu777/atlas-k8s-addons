@@ -1,0 +1,31 @@
+---
+- name: "unseal: Run openbao init and unseal script"
+  when: openbao_chart_state | default('present') == 'present'
+  ansible.builtin.shell: bash {{ k8s_manifests_dir }}/openbao.sh
+  environment:
+    KUBECONFIG: "{{ k8s_kubeconfig }}"
+  register: openbao_init_unseal
+  changed_when: >-
+    'Initializing OpenBao' in (openbao_init_unseal.stdout | default(''))
+    or 'Unsealing openbao-' in (openbao_init_unseal.stdout | default(''))
+    or 'init output saved' in (openbao_init_unseal.stdout | default(''))
+
+- name: Load Internal CA for OpenBao OIDC discovery
+  when: openbao_chart_state | default('present') == 'present'
+  ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/download_internal_ca.yaml"
+  vars:
+    download_internal_ca_dest: "{{ k8s_manifests_dir }}/openbao-oidc-ca.pem"
+
+- name: Bootstrap OpenBao admin user, ESO kubernetes auth, and Keycloak OIDC
+  when: openbao_chart_state | default('present') == 'present'
+  ansible.builtin.command: bash {{ k8s_manifests_dir }}/openbao-bootstrap.sh
+  environment:
+    KUBECONFIG: "{{ k8s_kubeconfig }}"
+    OPENBAO_ADMIN_USER: "{{ openbao_admin }}"
+    OPENBAO_ADMIN_PASSWORD: "{{ openbao_admin_password }}"
+    OPENBAO_OIDC_CLIENT_SECRET: "{{ openbao_oidc_client_secret }}"
+    OPENBAO_OIDC_CA_FILE: "{{ k8s_manifests_dir }}/openbao-oidc-ca.pem"
+  register: openbao_bootstrap
+  no_log: true
+  changed_when: >-
+    'OpenBao bootstrap completed successfully.' in (openbao_bootstrap.stdout | default(''))
