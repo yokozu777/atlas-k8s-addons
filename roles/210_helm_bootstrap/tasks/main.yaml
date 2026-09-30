@@ -31,13 +31,52 @@
     executable: /bin/sh
   changed_when: false
 
+- name: Collect chart states that gate Helm repositories
+  ansible.builtin.set_fact:
+    helm_chart_state_values: >-
+      {{
+        helm_chart_state_values | default({})
+        | combine({
+            item: lookup('vars', item, default='present') | default('present')
+          })
+      }}
+  loop: "{{ helm_repo_chart_states.values() | flatten | unique | list }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Select Helm repositories required by present charts
+  ansible.builtin.set_fact:
+    helm_repos_active: >-
+      {{
+        helm_repos | default([])
+        | helm_repos_required(helm_repo_chart_states, helm_chart_state_values)
+      }}
+
+- name: Note Helm repositories skipped because no chart is present
+  ansible.builtin.debug:
+    msg: >-
+      Skipping helm repo add for
+      {{
+        (
+          (helm_repos | default([]) | map(attribute='name') | list)
+          | difference(helm_repos_active | default([]) | map(attribute='name') | list)
+        ) | join(', ')
+      }}
+      because no linked chart_state is present.
+  when: >-
+    (
+      (helm_repos | default([]) | map(attribute='name') | list)
+      | difference(helm_repos_active | default([]) | map(attribute='name') | list)
+      | length
+    ) > 0
+
 - name: Add each Helm repository
   ansible.builtin.include_tasks:
     file: repo.yaml
     apply:
       tags:
         - 210_helm_bootstrap
-  loop: "{{ helm_repos }}"
+  loop: "{{ helm_repos_active | default([]) }}"
   loop_control:
     loop_var: helm_repo
 

@@ -43,6 +43,13 @@
     --ignore-not-found
   changed_when: false
 
+- name: Check k8s zone TSIG key before wildcard certificate
+  ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/assert_tsig_key.yaml"
+  vars:
+    tsig_zone: "{{ k8s_cluster_domain }}"
+    tsig_key_name: "{{ k8s_cluster_domain }}-key"
+    tsig_secret: "{{ k8s_secrets.external_dns_tsig_secret }}"
+
 - name: Wait for wildcard Certificate Ready
   ansible.builtin.command: >-
     kubectl wait --timeout=10m

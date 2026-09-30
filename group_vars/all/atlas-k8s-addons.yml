@@ -181,7 +181,6 @@ helm_repo_upstreams:
   - { name: opencost, nexus_path: opencost/, upstream_url: "https://opencost.github.io/opencost-helm-chart", upstream_host: opencost.github.io }
   - { name: kafka-ui, nexus_path: kafka-ui/, upstream_url: "https://provectus.github.io/kafka-ui-charts", upstream_host: provectus.github.io }
   - { name: chaos-mesh, nexus_path: chaos-mesh/, upstream_url: "https://charts.chaos-mesh.org", upstream_host: charts.chaos-mesh.org }
-  - { name: kubevious, nexus_path: kubevious/, upstream_url: "https://helm.kubevious.io", upstream_host: helm.kubevious.io }
   - { name: external-secrets, nexus_path: external-secrets/, upstream_url: "https://external-secrets.io", upstream_host: external-secrets.io, chart_hosts: [github.com] }
   - { name: external-dns, nexus_path: external-dns/, upstream_url: "https://kubernetes-sigs.github.io/external-dns", upstream_host: kubernetes-sigs.github.io }
   - { name: jaegertracing, nexus_path: jaegertracing/, upstream_url: "https://jaegertracing.github.io/helm-charts", upstream_host: jaegertracing.github.io }
@@ -218,7 +217,6 @@ helm_repos:
   - { name: opencost, path: opencost/ }
   - { name: kafka-ui, path: kafka-ui/ }
   - { name: chaos-mesh, path: chaos-mesh/ }
-  - { name: kubevious, path: kubevious/ }
   - { name: external-secrets, path: external-secrets/ }
   - { name: external-dns, path: external-dns/ }
   - { name: jaegertracing, path: jaegertracing/ }

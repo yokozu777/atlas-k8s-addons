@@ -59,6 +59,7 @@
           changed_when: false
 
         - name: Wait until Vault is unsealed
+          when: vault_chart_state | default('present') == 'present'
           ansible.builtin.command: >-
             kubectl exec -n {{ vault_namespace }} vault-0 -- vault status
           register: wait_vault_unsealed_for_eso
@@ -77,13 +78,19 @@
           delay: 5
           changed_when: false
 
-        - name: Render Vault ClusterSecretStore
+        - name: Render ClusterSecretStore manifests
+          when: >-
+            vault_chart_state | default('present') == 'present'
+            or openbao_chart_state | default('present') == 'present'
           ansible.builtin.template:
             src: clustersecretstore.yaml.j2
             dest: "{{ k8s_manifests_dir }}/external-secrets-clustersecretstore.yaml"
             mode: '0644'
 
-        - name: Apply Vault ClusterSecretStore
+        - name: Apply ClusterSecretStore manifests
+          when: >-
+            vault_chart_state | default('present') == 'present'
+            or openbao_chart_state | default('present') == 'present'
           ansible.builtin.command: >-
             kubectl --validate=false apply
             -f {{ k8s_manifests_dir }}/external-secrets-clustersecretstore.yaml
@@ -93,6 +100,7 @@
           delay: 10
 
         - name: Wait for ClusterSecretStore vault Ready
+          when: vault_chart_state | default('present') == 'present'
           ansible.builtin.command: >-
             kubectl wait clustersecretstore/vault
             --for=condition=Ready --timeout=120s
@@ -111,4 +119,16 @@
           until: wait_openbao_clustersecretstore_ready.rc == 0
           retries: 30
           delay: 10
+          changed_when: false
+
+        - name: Remove Vault ClusterSecretStore
+          when: vault_chart_state | default('present') == 'absent'
+          ansible.builtin.command: >-
+            kubectl delete clustersecretstore vault --ignore-not-found
+          changed_when: false
+
+        - name: Remove OpenBao ClusterSecretStore
+          when: openbao_chart_state | default('present') == 'absent'
+          ansible.builtin.command: >-
+            kubectl delete clustersecretstore openbao --ignore-not-found
           changed_when: false

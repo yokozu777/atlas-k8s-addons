@@ -3,6 +3,77 @@ controller_helm_cache_dir: "{{ controller_helm_config_dir }}/cache"
 helm_repo_update_retries: 1
 helm_repo_update_delay: 5
 helm_repo_http_timeout: 30s
+# helm repo add only when at least one linked chart_state is present.
+# skip and absent do not need the index. A repo missing from this map is always added.
+helm_repo_chart_states:
+  oauth2-proxy:
+    - oauth2_proxy_chart_state
+  falcosecurity:
+    - falco_chart_state
+  projectcalico:
+    - calico_chart_state
+  metallb:
+    - metallb_chart_state
+  prometheus-community:
+    - prometheus_chart_state
+    - blackbox_exporter_chart_state
+    - prometheus_adapter_chart_state
+    - elasticsearch_chart_state
+  ceph-csi-operator:
+    - rook_csi_drivers_chart_state
+  rook-release:
+    - rook_operator_chart_state
+    - rook_cluster_chart_state
+  fluent:
+    - fluentbit_chart_state
+  elastic:
+    - elasticsearch_chart_state
+  hashicorp:
+    - consul_chart_state
+    - vault_chart_state
+  openbao:
+    - openbao_chart_state
+  istio:
+    - istio_chart_state
+  kiali:
+    - kiali_chart_state
+  argo:
+    - argocd_chart_state
+    - argo_rollouts_chart_state
+  codecentric:
+    - keycloak_chart_state
+  sentry:
+    - sentry_chart_state
+  jetstack:
+    - cert_manager_chart_state
+    - trust_manager_chart_state
+  aquasecurity:
+    - trivy_chart_state
+  opencost:
+    - opencost_chart_state
+  chaos-mesh:
+    - chaos_mesh_chart_state
+  external-secrets:
+    - external_secrets_chart_state
+  external-dns:
+    - external_dns_chart_state
+    - external_dns_istio_chart_state
+  jaegertracing:
+    - jaeger_chart_state
+  open-telemetry:
+    - opentelemetry_collector_chart_state
+  cnpg:
+    - cnpg_chart_state
+  headlamp:
+    - headlamp_chart_state
+  thanos-community:
+    - thanos_chart_state
+  kyverno:
+    - kyverno_chart_state
+  policy-reporter:
+    - policy_reporter_chart_state
+  mailu:
+    - mailu_chart_state
 controller_ssl_cert_file: "{{ controller_ca_cert_dir }}/ca-bundle.crt"
 controller_tls_environment: "{{
     {

@@ -1,0 +1,26 @@
+---
+- name: Assert TSIG probe inputs are set
+  ansible.builtin.assert:
+    that:
+      - dns_server_ip | default('') | length > 0
+      - tsig_zone | default('') | length > 0
+      - tsig_key_name | default('') | length > 0
+      - tsig_secret | default('') | length > 0
+    fail_msg: >-
+      TSIG check for {{ tsig_key_name | default('unset key') }} needs
+      dns_server_ip, a zone, a key name, and a secret.
+
+- name: Check TSIG key {{ tsig_key_name }} is accepted by {{ dns_server_ip }}
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ role_path }}/../common/files/check_tsig.py"
+      - "{{ dns_server_ip }}"
+      - "53"
+      - "{{ tsig_zone }}"
+      - "{{ tsig_key_name }}"
+  environment:
+    ATLAS_TSIG_SECRET: "{{ tsig_secret }}"
+  changed_when: false
+  register: tsig_probe
+  failed_when: tsig_probe.rc != 0

@@ -677,6 +677,11 @@ class K8sAddonsHygieneTest(unittest.TestCase):
         self.assertIn("repository/{{ helm_repo.name }}-index.yaml", repo)
         self.assertIn("using stale index", repo)
         self.assertIn("Greenfield cannot continue", repo)
+        self.assertIn("helm_repos_required", main)
+        self.assertIn("helm_repos_active", main)
+        self.assertIn("consul_chart_state", defaults)
+        self.assertIn("vault_chart_state", defaults)
+        self.assertIn("hashicorp:", defaults)
         self.assertIn("helm_repo_update_retries: 1", defaults)
         self.assertIn("helm_repo_update_delay: 5", defaults)
         self.assertIn("HELM_REQUEST_TIMEOUT", defaults)
@@ -802,6 +807,58 @@ class K8sAddonsHygieneTest(unittest.TestCase):
         self.assertIn("name: openbao", store)
         self.assertIn("http://openbao.{{ openbao_namespace }}.svc.", store)
         self.assertIn('namespace: "{{ vault_namespace }}"', store)
+
+    def test_external_secrets_stores_follow_chart_state(self) -> None:
+        """ClusterSecretStore is created only for a present Vault or OpenBao."""
+        store = (
+            REPO_ROOT
+            / "roles"
+            / "972_external_secrets"
+            / "templates"
+            / "clustersecretstore.yaml.j2"
+        ).read_text(encoding="utf-8")
+        vault_doc, openbao_doc = store.split("{% if openbao_chart_state", 1)
+        self.assertIn(
+            "{% if vault_chart_state | default('present') == 'present' %}",
+            vault_doc,
+        )
+        self.assertIn("name: vault", vault_doc)
+        self.assertIn("| default('present') == 'present' %}", openbao_doc)
+        self.assertIn("name: openbao", openbao_doc)
+        tasks = (
+            REPO_ROOT / "roles" / "972_external_secrets" / "tasks" / "main.yaml"
+        ).read_text(encoding="utf-8")
+        chunks = re.split(r"(?m)^\s+- name:", tasks)
+        vault_wait = next(
+            (c for c in chunks if c.lstrip().startswith("Wait until Vault is unsealed\n")),
+            None,
+        )
+        self.assertIsNotNone(vault_wait)
+        self.assertIn("vault_chart_state | default('present') == 'present'", vault_wait)
+        vault_ready = next(
+            (
+                c
+                for c in chunks
+                if c.lstrip().startswith("Wait for ClusterSecretStore vault Ready\n")
+            ),
+            None,
+        )
+        self.assertIsNotNone(vault_ready)
+        self.assertIn("vault_chart_state | default('present') == 'present'", vault_ready)
+        render = next(
+            (c for c in chunks if c.lstrip().startswith("Render ClusterSecretStore manifests\n")),
+            None,
+        )
+        self.assertIsNotNone(render)
+        self.assertIn("openbao_chart_state | default('present') == 'present'", render)
+        self.assertIn(
+            "kubectl delete clustersecretstore vault --ignore-not-found",
+            tasks,
+        )
+        self.assertIn(
+            "kubectl delete clustersecretstore openbao --ignore-not-found",
+            tasks,
+        )
 
     def test_prometheus_adapter_resource_queries_skip_pod_cgroup(self) -> None:
         """HPA metrics.k8s.io must ignore cAdvisor pause/pod cgroup series."""

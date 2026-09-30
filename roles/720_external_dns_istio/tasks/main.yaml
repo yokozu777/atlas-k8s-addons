@@ -10,6 +10,13 @@
     - name: Install/configure external_dns_istio chart
       when: external_dns_istio_chart_state | default('present') == 'present'
       block:
+        - name: Check istio zone TSIG key before external-dns
+          ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/assert_tsig_key.yaml"
+          vars:
+            tsig_zone: "istio.{{ dns_domain_suffix }}"
+            tsig_key_name: "istio.{{ dns_domain_suffix }}-key"
+            tsig_secret: "{{ k8s_secrets.external_dns_istio_tsig_secret }}"
+
         - name: Render external-dns-istio helm values
           ansible.builtin.template:
             src: external-dns-istio.yaml.j2

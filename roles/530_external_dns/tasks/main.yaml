@@ -16,6 +16,20 @@
     - name: Install/configure external-dns chart
       when: external_dns_chart_state | default('present') == 'present'
       block:
+        - name: Check k8s zone TSIG key before external-dns
+          ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/assert_tsig_key.yaml"
+          vars:
+            tsig_zone: "{{ k8s_cluster_domain }}"
+            tsig_key_name: "{{ k8s_cluster_domain }}-key"
+            tsig_secret: "{{ k8s_secrets.external_dns_tsig_secret }}"
+
+        - name: Check apex zone TSIG key before external-dns
+          ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/assert_tsig_key.yaml"
+          vars:
+            tsig_zone: "{{ dns_domain_suffix }}"
+            tsig_key_name: "{{ dns_domain_suffix }}"
+            tsig_secret: "{{ k8s_secrets.external_dns_apex_tsig_secret }}"
+
         - name: Render external-dns helm values
           ansible.builtin.template:
             src: external-dns.yaml.j2
