@@ -422,8 +422,8 @@ external_dns_chart_state: present
 # dns_server_ip — BIND / DNS that receives external-dns updates
 external_dns_txt_owner_id: k8s   unique per cluster (external-dns txtOwnerId)
 external_dns_apex_txt_owner_id: k8s-apex
-# external_dns_tsig_secret / external_dns_apex_tsig_secret → atlas-k8s-addons.secrets.yml
-# Apex TSIG = BIND bind_zones.apex (provision_dns_key_secret). Child k8s zone uses external_dns_tsig_secret.
+# external_dns_tsig_secret / external_dns_istio_tsig_secret → default secrets (one value each).
+# Apex TSIG is provision_dns_key_secret. Child k8s zone uses external_dns_tsig_secret.
 
 # --- 540_cert_manager ---
 cert_manager_namespace: cert-manager
@@ -1059,7 +1059,7 @@ k8s_secrets:
   mailu_secret_key: "{{ mailu_secret_key }}"
   mailu_initial_password: "{{ mailu_initial_password }}"
   external_dns_tsig_secret: "{{ external_dns_tsig_secret }}"
-  external_dns_apex_tsig_secret: "{{ external_dns_apex_tsig_secret }}"
+  external_dns_apex_tsig_secret: "{{ provision_dns_key_secret }}"
   external_dns_istio_tsig_secret: "{{ external_dns_istio_tsig_secret }}"
   ceph_dashboard_password: "{{ ceph_dashboard_password }}"
   elastic_password: "{{ elastic_password }}"

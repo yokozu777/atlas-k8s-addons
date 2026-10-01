@@ -1,0 +1,4 @@
+---
+# Apex zone uses the lab DNS key. Child zones keep external_dns_tsig_secret
+# and external_dns_istio_tsig_secret.
+external_dns_apex_tsig_secret: "{{ provision_dns_key_secret | default('', true) }}"

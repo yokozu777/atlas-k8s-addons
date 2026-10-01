@@ -469,13 +469,13 @@ class K8sAddonsHygieneTest(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("mailu_secret_key:", secrets)
         self.assertIn("mailu_initial_password:", secrets)
-        self.assertIn("external_dns_apex_tsig_secret:", secrets)
+        self.assertNotIn("external_dns_apex_tsig_secret:", secrets)
         example = (REPO_ROOT / "examples" / "secrets.example.yml").read_text(
             encoding="utf-8"
         )
         self.assertIn("mailu_secret_key:", example)
         self.assertIn("mailu_initial_password:", example)
-        self.assertIn("external_dns_apex_tsig_secret:", example)
+        self.assertNotIn("external_dns_apex_tsig_secret:", example)
         validate_hosts = (
             REPO_ROOT / "roles" / "130_validate_vars" / "tasks" / "ingress_hosts.yml"
         ).read_text(encoding="utf-8")
@@ -491,6 +491,10 @@ class K8sAddonsHygieneTest(unittest.TestCase):
         self.assertIn("k8s_secrets.mailu_secret_key", validate_secrets)
         self.assertIn("k8s_secrets.mailu_initial_password", validate_secrets)
         self.assertIn("k8s_secrets.external_dns_apex_tsig_secret", validate_secrets)
+        self.assertIn(
+            'external_dns_apex_tsig_secret: "{{ provision_dns_key_secret }}"',
+            catalog,
+        )
         readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("950_mailu", readme)
 
